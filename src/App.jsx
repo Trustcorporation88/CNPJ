@@ -859,8 +859,8 @@ function TabCNPJ({ isAdmin, clientKeyRequired }) {
                   "Inscrições estaduais" acima, de graça.
                 </p>
                 <OfficialPanel
-                  title="Simples Nacional / MEI"
-                  subtitle="Opção pelo Simples e enquadramento no MEI"
+                  title="Enquadramento tributário (Simples / MEI)"
+                  subtitle="Mostra se a empresa é optante do Simples Nacional e se é MEI, com as datas"
                   icon={icons.percent}
                   endpoint={`/api/simples?cnpj=${digits}`}
                   disabled={!digits}
