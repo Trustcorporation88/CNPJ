@@ -232,7 +232,8 @@ function OfficialPanel({ title, subtitle, icon, endpoint, disabled }) {
         setState({ loading: false, data, error: '' })
       }
     } catch (e) {
-      setState({ loading: false, data: null, error: e.message === 'unauthorized' ? 'Chave de acesso necessária.' : e.message })
+      if (e.unauthorized) window.dispatchEvent(new Event('need-key'))
+      setState({ loading: false, data: null, error: e.message === 'unauthorized' ? 'Informe a chave de acesso (cadeado no topo) para liberar as consultas pagas.' : e.message })
     }
   }
   return (
@@ -722,7 +723,8 @@ function TabCPF() {
         setState({ loading: false, data, error: '' })
       }
     } catch (e) {
-      setState({ loading: false, data: null, error: e.message === 'unauthorized' ? 'Chave de acesso necessária.' : e.message })
+      if (e.unauthorized) window.dispatchEvent(new Event('need-key'))
+      setState({ loading: false, data: null, error: e.message === 'unauthorized' ? 'Informe a chave de acesso (cadeado no topo) para liberar as consultas pagas.' : e.message })
     }
   }
 
@@ -802,13 +804,13 @@ function TabCPF() {
   )
 }
 
-// ---------- Tela de login (bloqueia o site) ----------
-function LoginGate({ onOk }) {
-  const [key, setKey] = useState('')
+// ---------- Modal de chave (pedido só nas consultas pagas) ----------
+function KeyModal({ onSave, onClose }) {
+  const [key, setKey] = useState(getKey())
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const entrar = async () => {
+  const salvar = async () => {
     if (!key.trim()) return
     setLoading(true)
     setError('')
@@ -816,7 +818,7 @@ function LoginGate({ onOk }) {
       const res = await fetch('/api/verify', { headers: { 'x-access-key': key } })
       if (res.ok) {
         localStorage.setItem('access_key', key)
-        onOk()
+        onSave()
       } else {
         setError('Chave de acesso incorreta.')
       }
@@ -828,15 +830,18 @@ function LoginGate({ onOk }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm max-w-sm w-full p-8">
-        <div className="flex flex-col items-center text-center mb-6">
-          <span className="w-14 h-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center mb-4">
-            {icons.shield('w-7 h-7')}
+    <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="flex items-center gap-3 mb-3">
+          <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+            {icons.lock('w-5 h-5')}
           </span>
-          <h1 className="text-xl font-bold text-slate-900">Central de Consultas Fiscais</h1>
-          <p className="text-sm text-slate-500 mt-1">Acesso restrito. Informe a chave de acesso para continuar.</p>
+          <h3 className="font-semibold text-slate-900">Chave de acesso</h3>
         </div>
+        <p className="text-sm text-slate-500 mb-4">
+          As consultas oficiais consomem créditos pagos. Informe a chave definida pelo administrador para liberá-las.
+          A consulta cadastral do CNPJ continua livre.
+        </p>
         <div className="relative mb-3">
           <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">{icons.lock('w-5 h-5')}</span>
           <input
@@ -844,19 +849,24 @@ function LoginGate({ onOk }) {
             value={key}
             autoFocus
             onChange={(e) => setKey(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !loading && entrar()}
+            onKeyDown={(e) => e.key === 'Enter' && !loading && salvar()}
             placeholder="Chave de acesso"
             className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
         {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
-        <button
-          onClick={entrar}
-          disabled={loading}
-          className="w-full py-3 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-60 transition-colors"
-        >
-          {loading ? 'Verificando...' : 'Entrar'}
-        </button>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium">
+            Cancelar
+          </button>
+          <button
+            onClick={salvar}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
+          >
+            {loading ? 'Verificando...' : 'Liberar consultas'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -865,40 +875,13 @@ function LoginGate({ onOk }) {
 // ---------- App ----------
 export default function App() {
   const [tab, setTab] = useState('cnpj')
-  // gate: 'loading' | 'open' (sem proteção) | 'locked' | 'ok'
-  const [gate, setGate] = useState('loading')
-
-  const checkAccess = async () => {
-    try {
-      const health = await fetch('/api/health').then((r) => r.json())
-      if (!health.protected) return setGate('open')
-      const res = await fetch('/api/verify', { headers: { 'x-access-key': getKey() } })
-      setGate(res.ok ? 'ok' : 'locked')
-    } catch {
-      setGate('locked')
-    }
-  }
+  const [keyOpen, setKeyOpen] = useState(false)
 
   useEffect(() => {
-    checkAccess()
+    const open = () => setKeyOpen(true)
+    window.addEventListener('need-key', open)
+    return () => window.removeEventListener('need-key', open)
   }, [])
-
-  const sair = () => {
-    localStorage.removeItem('access_key')
-    setGate('locked')
-  }
-
-  if (gate === 'loading') {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
-  }
-
-  if (gate === 'locked') return <LoginGate onOk={() => setGate('ok')} />
-
-  const protectedMode = gate === 'ok'
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -911,16 +894,13 @@ export default function App() {
             </span>
             <span className="font-bold text-slate-900">Central de Consultas Fiscais</span>
           </div>
-          {protectedMode && (
-            <button
-              onClick={sair}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 text-sm font-medium transition-colors"
-              title="Sair"
-            >
-              {icons.lock('w-4 h-4')}
-              Sair
-            </button>
-          )}
+          <button
+            onClick={() => setKeyOpen(true)}
+            className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+            title="Chave de acesso das consultas pagas"
+          >
+            {icons.lock('w-5 h-5')}
+          </button>
         </div>
       </nav>
 
@@ -958,6 +938,8 @@ export default function App() {
           comprovantes oficiais dos órgãos emissores.
         </footer>
       </div>
+
+      {keyOpen && <KeyModal onSave={() => setKeyOpen(false)} onClose={() => setKeyOpen(false)} />}
     </div>
   )
 }
