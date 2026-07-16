@@ -350,7 +350,7 @@ function Skeleton() {
 }
 
 // ---------- Aba CNPJ ----------
-function TabCNPJ({ saldoRefresh }) {
+function TabCNPJ() {
   const [input, setInput] = useState('')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -564,9 +564,6 @@ function TabCNPJ({ saldoRefresh }) {
                 disabled={!digits}
               />
             </div>
-            <button onClick={saldoRefresh} className="text-xs text-blue-600 hover:underline mt-3">
-              Atualizar saldo de créditos
-            </button>
           </div>
 
           {/* Atividades secundárias */}
@@ -784,21 +781,9 @@ function KeyModal({ onSave, onClose }) {
 // ---------- App ----------
 export default function App() {
   const [tab, setTab] = useState('cnpj')
-  const [saldo, setSaldo] = useState(null)
   const [keyOpen, setKeyOpen] = useState(false)
 
-  const loadSaldo = async () => {
-    try {
-      const d = await api('/api/saldo')
-      const n = d.saldo ?? d.creditos ?? d.credits ?? d.data?.saldo
-      if (n !== undefined) setSaldo(String(n))
-    } catch (e) {
-      if (e.unauthorized) setSaldo('bloqueado')
-    }
-  }
-
   useEffect(() => {
-    loadSaldo()
     const open = () => setKeyOpen(true)
     window.addEventListener('need-key', open)
     return () => window.removeEventListener('need-key', open)
@@ -816,12 +801,6 @@ export default function App() {
             <span className="font-bold text-slate-900">Central de Consultas Fiscais</span>
           </div>
           <div className="flex items-center gap-3">
-            {saldo !== null && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 text-sm font-medium">
-                {icons.zap('w-4 h-4')}
-                {saldo === 'bloqueado' ? 'Saldo: —' : `${saldo} créditos`}
-              </span>
-            )}
             <button
               onClick={() => setKeyOpen(true)}
               className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
@@ -860,7 +839,7 @@ export default function App() {
           ))}
         </div>
 
-        {tab === 'cnpj' ? <TabCNPJ saldoRefresh={loadSaldo} /> : <TabCPF />}
+        {tab === 'cnpj' ? <TabCNPJ /> : <TabCPF />}
 
         <footer className="text-center text-xs text-slate-400 mt-12 pb-8">
           Dados públicos: publica.cnpj.ws • Consultas oficiais: SintegraWS • Documentos gerados não substituem os
@@ -873,7 +852,6 @@ export default function App() {
           onSave={(k) => {
             localStorage.setItem('access_key', k)
             setKeyOpen(false)
-            loadSaldo()
           }}
           onClose={() => setKeyOpen(false)}
         />
