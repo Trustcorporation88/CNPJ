@@ -133,6 +133,71 @@ const prettyLabel = (key) =>
     .replace(/[_-]/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
 
+// ---------- Exportação de PDF genérica (via impressão do navegador) ----------
+// Renderiza um objeto de dados como linhas rótulo/valor em HTML, ignorando campos internos
+function dataToRowsHtml(data, ignore, labels) {
+  const rows = []
+  const walk = (obj, prefix = '') => {
+    Object.entries(obj || {}).forEach(([k, v]) => {
+      if (ignore.has(k.toLowerCase())) return
+      if (v === null || v === undefined || v === '') return
+      const label = (labels && labels[k]) || prettyLabel(k)
+      if (typeof v === 'object') {
+        if (Array.isArray(v)) {
+          if (v.length === 0) return
+          v.forEach((item, i) => {
+            if (typeof item === 'object') walk(item, `${label} ${i + 1} · `)
+            else rows.push([`${prefix}${label} ${i + 1}`, String(item)])
+          })
+        } else {
+          walk(v, `${prefix}${label} · `)
+        }
+      } else {
+        const s = String(v).trim()
+        if (s === '' || /^\*+$/.test(s) || s.toLowerCase() === 'null') return
+        rows.push([`${prefix}${label}`, s])
+      }
+    })
+  }
+  walk(data)
+  return rows
+    .map(
+      ([l, v]) =>
+        `<tr><td style="color:#64748b;padding:6px 12px 6px 0;border-bottom:1px solid #f1f5f9;vertical-align:top">${l}</td><td style="color:#0f172a;font-weight:500;padding:6px 0;border-bottom:1px solid #f1f5f9">${v}</td></tr>`
+    )
+    .join('')
+}
+
+// Abre uma janela de impressão com um documento próprio (título + cabeçalho + conteúdo)
+function printHtml(titulo, subtitulo, contentHtml) {
+  const hoje = new Date().toLocaleString('pt-BR')
+  const win = window.open('', '_blank')
+  if (!win) {
+    alert('Permita pop-ups para exportar o PDF.')
+    return
+  }
+  win.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+    <title>${titulo}</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { font-family: -apple-system, system-ui, sans-serif; color:#0f172a; margin:32px; }
+      .head { border-bottom:2px solid #1e293b; padding-bottom:12px; margin-bottom:16px; }
+      .head h1 { font-size:18px; margin:0; }
+      .head p { font-size:12px; color:#64748b; margin:4px 0 0; }
+      table { width:100%; border-collapse:collapse; font-size:13px; }
+      .foot { margin-top:24px; padding-top:12px; border-top:1px solid #e2e8f0; font-size:10px; color:#94a3b8; }
+      @page { size:A4; margin:14mm; }
+    </style></head><body>
+    <div class="head"><h1>${titulo}</h1><p>${subtitulo} • Emitido em ${hoje}</p></div>
+    <table>${contentHtml}</table>
+    <p class="foot">Documento informativo gerado a partir de dados públicos e de provedores de consulta.
+    Não substitui os comprovantes oficiais emitidos pela Receita Federal, Sefaz estaduais ou Suframa.</p>
+    </body></html>`)
+  win.document.close()
+  win.focus()
+  setTimeout(() => win.print(), 400)
+}
+
 // ---------- Acesso à API do backend ----------
 // Duas fontes de chave:
 //  - adminKey: persistida (admin loga uma vez e usa tudo)
@@ -334,6 +399,19 @@ function OfficialPanel({ title, subtitle, icon, endpoint, disabled }) {
             {state.data._provedor && (
               <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">Fonte: {state.data._provedor}</span>
             )}
+            <button
+              onClick={() =>
+                printHtml(
+                  title,
+                  `Fonte: ${state.data._provedor || '—'}`,
+                  dataToRowsHtml(state.data, IGNORE_KEYS, LABELS)
+                )
+              }
+              className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              {icons.printer('w-3.5 h-3.5')}
+              Exportar PDF
+            </button>
           </div>
           <KVTable data={state.data} />
         </div>
@@ -1049,12 +1127,23 @@ function TabCPF() {
         <div className="bg-white border border-slate-200 rounded-2xl p-6">
           <div className="flex items-center justify-between gap-3 mb-4">
             <h3 className="text-lg font-semibold text-slate-900">Situação cadastral do CPF</h3>
-            {state.data.situacao_cadastral && (
-              <StatusBadge
-                ok={/regular/i.test(state.data.situacao_cadastral)}
-                label={state.data.situacao_cadastral}
-              />
-            )}
+            <div className="flex items-center gap-2">
+              {state.data.situacao_cadastral && (
+                <StatusBadge
+                  ok={/regular/i.test(state.data.situacao_cadastral)}
+                  label={state.data.situacao_cadastral}
+                />
+              )}
+              <button
+                onClick={() =>
+                  printHtml('Situação cadastral do CPF', 'Consulta CPF', dataToRowsHtml(state.data, IGNORE_KEYS, LABELS))
+                }
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs"
+              >
+                {icons.printer('w-3.5 h-3.5')}
+                Exportar PDF
+              </button>
+            </div>
           </div>
           {state.data._cache && <p className="text-xs text-slate-400 mb-2">Resultado em cache (não consumiu crédito)</p>}
           <KVTable data={state.data} />
