@@ -1,1 +1,25 @@
 @import "tailwindcss";
+
+/* Impressão: só o cartão CNPJ sai no PDF */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  body {
+    background: #fff !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #cartao-print,
+  #cartao-print * {
+    visibility: visible;
+  }
+  #cartao-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+}

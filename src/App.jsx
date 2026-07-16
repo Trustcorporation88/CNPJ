@@ -24,6 +24,9 @@ const icons = {
   users: (cls) => <Icon className={cls} path={<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></>} />,
   chevron: (cls) => <Icon className={cls} path={<polyline points="6 9 12 15 18 9" />} />,
   code: (cls) => <Icon className={cls} path={<><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></>} />,
+  card: (cls) => <Icon className={cls} path={<><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></>} />,
+  printer: (cls) => <Icon className={cls} path={<><polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></>} />,
+  close: (cls) => <Icon className={cls} path={<><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>} />,
 }
 
 // ---------- Formatadores ----------
@@ -88,12 +91,122 @@ function Skeleton() {
   )
 }
 
+function Campo({ label, value, className = '' }) {
+  return (
+    <div className={`border border-slate-300 rounded px-3 py-2 ${className}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="text-sm font-medium text-slate-900 break-words">{value || '—'}</p>
+    </div>
+  )
+}
+
+function CartaoCNPJ({ data, endereco, onClose }) {
+  const est = data.estabelecimento
+  const hoje = new Date().toLocaleDateString('pt-BR')
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-start justify-center overflow-y-auto p-4 print:p-0 print:bg-white print:static print:overflow-visible">
+      <div className="bg-white rounded-2xl shadow-xl max-w-3xl w-full my-6 print:my-0 print:shadow-none print:rounded-none">
+        {/* Barra de ações (não sai no PDF) */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 print:hidden">
+          <h3 className="font-semibold text-slate-900">Cartão CNPJ</h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+            >
+              {icons.printer('w-4 h-4')}
+              Exportar PDF
+            </button>
+            <button
+              onClick={onClose}
+              aria-label="Fechar"
+              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+            >
+              {icons.close('w-5 h-5')}
+            </button>
+          </div>
+        </div>
+
+        {/* Área impressa */}
+        <div id="cartao-print" className="p-8 print:p-0">
+          <div className="border-2 border-slate-800 rounded-lg p-6 space-y-4">
+            <div className="text-center border-b border-slate-300 pb-4">
+              <p className="text-xs uppercase tracking-widest text-slate-500">Cartão CNPJ</p>
+              <p className="text-lg font-bold text-slate-900">Ficha Cadastral da Pessoa Jurídica</p>
+              <p className="text-xs text-slate-500 mt-1">Emitido em {hoje} • Fonte: dados públicos (publica.cnpj.ws)</p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <Campo label="Número de inscrição" value={maskCNPJ(est?.cnpj ?? '')} />
+              <Campo label="Data de abertura" value={formatDate(est?.data_inicio_atividade)} />
+              <Campo label="Matriz / Filial" value={est?.tipo} />
+              <Campo label="Nome empresarial" value={data.razao_social} className="col-span-3" />
+              <Campo label="Título do estabelecimento (nome fantasia)" value={est?.nome_fantasia} className="col-span-2" />
+              <Campo label="Porte" value={data.porte?.descricao} />
+              <Campo
+                label="Atividade econômica principal"
+                value={
+                  est?.atividade_principal
+                    ? `${est.atividade_principal.subclasse ?? est.atividade_principal.id ?? ''} — ${est.atividade_principal.descricao}`
+                    : est?.cnae_fiscal_descricao
+                }
+                className="col-span-3"
+              />
+              {est?.atividades_secundarias?.length > 0 && (
+                <div className="col-span-3 border border-slate-300 rounded px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Atividades econômicas secundárias
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {est.atividades_secundarias.map((a, i) => (
+                      <li key={i} className="text-sm text-slate-900">
+                        {(a.subclasse ?? a.id ?? '')} — {a.descricao}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <Campo label="Natureza jurídica" value={data.natureza_juridica?.descricao} className="col-span-2" />
+              <Campo label="Capital social" value={formatBRL(data.capital_social)} />
+              <Campo label="Endereço" value={endereco} className="col-span-3" />
+              <Campo label="Telefone" value={formatPhone(est?.ddd1, est?.telefone1)} />
+              <Campo label="E-mail" value={est?.email} className="col-span-2" />
+              <Campo label="Situação cadastral" value={est?.situacao_cadastral} />
+              <Campo label="Data da situação cadastral" value={formatDate(est?.data_situacao_cadastral)} />
+              <Campo label="Última atualização" value={formatDate(data.atualizado_em?.slice(0, 10))} />
+            </div>
+
+            {data.socios?.length > 0 && (
+              <div className="border border-slate-300 rounded px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Quadro societário</p>
+                <ul className="mt-1 space-y-0.5">
+                  {data.socios.map((s, i) => (
+                    <li key={i} className="text-sm text-slate-900">
+                      {s.nome} — {s.qualificacao_socio?.descricao}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <p className="text-[10px] text-slate-500 border-t border-slate-300 pt-3">
+              Documento informativo gerado a partir de dados públicos da Receita Federal. Não substitui o
+              Comprovante de Inscrição e de Situação Cadastral oficial, disponível no site da Receita Federal do Brasil.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [input, setInput] = useState('')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [jsonOpen, setJsonOpen] = useState(false)
+  const [cardOpen, setCardOpen] = useState(false)
 
   const consultar = async () => {
     const digits = input.replace(/\D/g, '')
@@ -105,6 +218,7 @@ export default function App() {
     setLoading(true)
     setData(null)
     setJsonOpen(false)
+    setCardOpen(false)
     try {
       const res = await fetch(`https://publica.cnpj.ws/cnpj/${digits}`)
       if (res.status === 404) {
@@ -207,14 +321,23 @@ export default function App() {
                   <h2 className="text-2xl font-bold text-slate-900">{data.razao_social}</h2>
                   {est?.nome_fantasia && <p className="text-slate-500 mt-1">{est.nome_fantasia}</p>}
                 </div>
-                <span
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium self-start ${
-                    ativa ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                  }`}
-                >
-                  <span className={`w-2 h-2 rounded-full ${ativa ? 'bg-green-500' : 'bg-red-500'}`} />
-                  {est?.situacao_cadastral ?? 'Desconhecida'}
-                </span>
+                <div className="flex flex-col sm:items-end gap-2">
+                  <span
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium self-start sm:self-end ${
+                      ativa ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${ativa ? 'bg-green-500' : 'bg-red-500'}`} />
+                    {est?.situacao_cadastral ?? 'Desconhecida'}
+                  </span>
+                  <button
+                    onClick={() => setCardOpen(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-600 text-blue-600 text-sm font-medium hover:bg-blue-50 transition-colors self-start sm:self-end"
+                  >
+                    {icons.card('w-4 h-4')}
+                    Gerar Cartão CNPJ
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -306,6 +429,10 @@ export default function App() {
               )}
             </div>
           </div>
+        )}
+
+        {cardOpen && data && (
+          <CartaoCNPJ data={data} endereco={endereco} onClose={() => setCardOpen(false)} />
         )}
       </div>
     </div>
