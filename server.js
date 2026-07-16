@@ -7,6 +7,8 @@ const app = express()
 const PORT = process.env.PORT || 3000
 
 const SINTEGRA_TOKEN = process.env.SINTEGRA_TOKEN || ''
+const CNPJA_TOKEN = process.env.CNPJA_TOKEN || ''
+const CNPJA_BASE = 'https://api.cnpja.com'
 const ACCESS_KEY = process.env.ACCESS_KEY || ''
 const SWS_BASE = 'https://www.sintegraws.com.br/api/v1'
 
@@ -145,6 +147,65 @@ app.get('/api/sws/cpf', auth, (req, res) => {
   if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido.' })
   if (nasc.length !== 8) return res.status(400).json({ error: 'Data de nascimento inválida (use dd/mm/aaaa).' })
   sws({ cpf, 'data-nascimento': nasc, plugin: 'CPF' }, res)
+})
+
+// ---------- CNPJá (provedor comercial preferencial) ----------
+// Uma única chamada a /office/{cnpj} traz tudo; parâmetros ligam cada serviço.
+async function cnpja(cnpj, query, res) {
+  if (!CNPJA_TOKEN) {
+    return res.status(500).json({ error: 'CNPJA_TOKEN não configurado no servidor.' })
+  }
+  const cacheKey = `cnpja:${cnpj}:${new URLSearchParams(query).toString()}`
+  const hit = cacheGet(cacheKey)
+  if (hit) return res.json({ ...hit, _cache: true })
+
+  const qs = new URLSearchParams(query).toString()
+  const url = `${CNPJA_BASE}/office/${cnpj}${qs ? `?${qs}` : ''}`
+  let lastErr
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const r = await fetch(url, {
+        headers: { Authorization: CNPJA_TOKEN, Accept: 'application/json' },
+        signal: AbortSignal.timeout(42000),
+      })
+      const text = await r.text()
+      let data
+      try {
+        data = JSON.parse(text)
+      } catch {
+        return res.status(500).json({ error: `CNPJá respondeu HTTP ${r.status} inesperado.`, detail: text.slice(0, 300) })
+      }
+      if (r.status === 401) return res.status(500).json({ error: 'Chave do CNPJá inválida (verifique CNPJA_TOKEN).' })
+      if (r.status === 402) return res.status(500).json({ error: 'Créditos do CNPJá esgotados.' })
+      if (r.status === 429) return res.status(500).json({ error: 'Limite de consultas por minuto do CNPJá excedido. Aguarde um instante.' })
+      if (r.status === 404) return res.status(500).json({ error: 'CNPJ não encontrado na base do CNPJá.' })
+      if (!r.ok) return res.status(500).json({ error: data?.message || `CNPJá respondeu HTTP ${r.status}.` })
+      cacheSet(cacheKey, data)
+      return res.json(data)
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  res.status(500).json({
+    error: 'Falha de conexão do servidor com o CNPJá após 2 tentativas.',
+    detail: `${lastErr?.name ?? ''} ${lastErr?.message ?? ''}`.trim(),
+  })
+}
+
+// Consulta unificada: cadastral sempre; simples/registrations/suframa conforme flags
+app.get('/api/cnpja/office', auth, (req, res) => {
+  const cnpj = onlyDigits(req.query.cnpj)
+  if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' })
+  const q = {}
+  if (req.query.simples === 'true') q.simples = 'true'
+  if (req.query.registrations) q.registrations = String(req.query.registrations).toUpperCase()
+  if (req.query.suframa === 'true') q.suframa = 'true'
+  // CACHE_IF_FRESH com maxAge curto = quase tempo real, mas reaproveita cache recente sem gastar crédito
+  if (req.query.fresh === 'true') {
+    q.strategy = 'CACHE_IF_FRESH'
+    q.maxAge = '1'
+  }
+  cnpja(cnpj, q, res)
 })
 
 // ---------- Frontend estático ----------

@@ -76,6 +76,58 @@ const formatBRL = (v) => {
 const formatCEP = (cep) => (cep ? cep.replace(/\D/g, '').replace(/(\d{5})(\d{3})/, '$1-$2') : '')
 const formatPhone = (ddd, num) => (ddd && num ? `(${ddd}) ${num}` : '—')
 
+// Converte a resposta do CNPJá para a mesma estrutura que a UI já usa (baseada no cnpj.ws)
+function normalizeCnpja(d) {
+  const c = d.company || {}
+  const addr = d.address || {}
+  const phone = (d.phones && d.phones[0]) || {}
+  const regs = d.registrations || []
+  return {
+    _fonte: 'cnpja',
+    razao_social: c.name,
+    capital_social: c.equity,
+    porte: { descricao: c.size?.text },
+    natureza_juridica: { descricao: c.nature?.text },
+    estabelecimento: {
+      cnpj: d.taxId,
+      nome_fantasia: d.alias,
+      tipo: d.head ? 'Matriz' : 'Filial',
+      situacao_cadastral: d.status?.text,
+      data_situacao_cadastral: d.statusDate,
+      data_inicio_atividade: d.founded,
+      email: (d.emails && d.emails[0]?.address) || '',
+      ddd1: phone.area,
+      telefone1: phone.number,
+      tipo_logradouro: '',
+      logradouro: addr.street,
+      numero: addr.number,
+      complemento: addr.details,
+      bairro: addr.district,
+      cep: addr.zip,
+      cidade: { nome: addr.city },
+      estado: { sigla: addr.state },
+      atividade_principal: d.mainActivity
+        ? { subclasse: d.mainActivity.id, descricao: d.mainActivity.text }
+        : undefined,
+      atividades_secundarias: (d.sideActivities || []).map((a) => ({ subclasse: a.id, descricao: a.text })),
+      inscricoes_estaduais: regs.map((r) => ({
+        inscricao_estadual: r.number,
+        estado: { sigla: r.state },
+        ativo: r.enabled,
+        _status_text: r.status?.text,
+        _tipo: r.type?.text,
+      })),
+    },
+    socios: (c.members || []).map((m) => ({
+      nome: m.person?.name,
+      qualificacao_socio: { descricao: m.role?.text },
+    })),
+    _simples: c.simples,
+    _simei: c.simei,
+    _raw: d,
+  }
+}
+
 const prettyLabel = (key) =>
   key
     .replace(/[_-]/g, ' ')
@@ -426,24 +478,46 @@ function TabCNPJ() {
     setJsonOpen(false)
     setCardOpen(false)
     try {
-      const res = await fetch(`https://publica.cnpj.ws/cnpj/${digits}`)
-      if (res.status === 400) {
-        setError('CNPJ inválido (dígito verificador não confere). Revise o número digitado.')
-        return
+      // Fonte principal: CNPJá (traz cadastral + inscrições estaduais + Simples numa só chamada).
+      // Se não estiver configurado/autorizado, cai para a base pública gratuita.
+      let usouCnpja = false
+      try {
+        const r = await fetch(
+          `/api/cnpja/office?cnpj=${digits}&simples=true&registrations=ALL`,
+          { headers: { 'x-access-key': getKey() } }
+        )
+        if (r.ok) {
+          const d = await r.json()
+          if (d && d.taxId) {
+            setData(normalizeCnpja(d))
+            usouCnpja = true
+          }
+        }
+        // 401 (sem chave) ou 500 (token ausente) => silenciosamente usa a base pública
+      } catch {
+        /* usa fallback */
       }
-      if (res.status === 404) {
-        setError('CNPJ não encontrado na base da Receita Federal. Verifique o número e tente novamente.')
-        return
+
+      if (!usouCnpja) {
+        const res = await fetch(`https://publica.cnpj.ws/cnpj/${digits}`)
+        if (res.status === 400) {
+          setError('CNPJ inválido (dígito verificador não confere). Revise o número digitado.')
+          return
+        }
+        if (res.status === 404) {
+          setError('CNPJ não encontrado na base da Receita Federal. Verifique o número e tente novamente.')
+          return
+        }
+        if (res.status === 429) {
+          setError('Limite de consultas gratuitas atingido (3/min). Aguarde alguns instantes e tente novamente.')
+          return
+        }
+        if (!res.ok) {
+          setError('Não foi possível consultar agora. Tente novamente em instantes.')
+          return
+        }
+        setData(await res.json())
       }
-      if (res.status === 429) {
-        setError('Limite de consultas gratuitas atingido (3/min). Aguarde alguns instantes e tente novamente.')
-        return
-      }
-      if (!res.ok) {
-        setError('Não foi possível consultar agora. Tente novamente em instantes.')
-        return
-      }
-      setData(await res.json())
     } catch {
       setError('Falha de conexão com o serviço de consulta. Verifique sua internet e tente novamente.')
     } finally {
@@ -579,20 +653,55 @@ function TabCNPJ() {
                 ))}
               </div>
               <p className="text-xs text-slate-400 mt-3">
-                Status conforme base pública. Para a situação detalhada em tempo real, use a consulta SINTEGRA abaixo.
+                {data._fonte === 'cnpja'
+                  ? 'Número, UF e situação das inscrições estaduais via Cadastro Centralizado de Contribuintes (CCC/CNPJá).'
+                  : 'Status conforme base pública. Para a situação detalhada em tempo real, use a consulta SINTEGRA abaixo.'}
               </p>
             </div>
           )}
 
-          {/* Consultas oficiais SintegraWS */}
+          {/* Simples Nacional / SIMEI — já vem na consulta CNPJá */}
+          {data._fonte === 'cnpja' && (data._simples || data._simei) && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-6">
+              <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900 mb-4">
+                <span className="text-blue-600">{icons.percent('w-5 h-5')}</span>
+                Regime tributário
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Simples Nacional</p>
+                    <p className="text-sm font-medium text-slate-800">
+                      {data._simples?.optant ? 'Optante' : 'Não optante'}
+                      {data._simples?.since ? ` desde ${formatDate(data._simples.since)}` : ''}
+                    </p>
+                  </div>
+                  <StatusBadge ok={!!data._simples?.optant} label={data._simples?.optant ? 'Sim' : 'Não'} />
+                </div>
+                <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">MEI (SIMEI)</p>
+                    <p className="text-sm font-medium text-slate-800">
+                      {data._simei?.optant ? 'Enquadrado como MEI' : 'Não é MEI'}
+                      {data._simei?.since ? ` desde ${formatDate(data._simei.since)}` : ''}
+                    </p>
+                  </div>
+                  <StatusBadge ok={!!data._simei?.optant} label={data._simei?.optant ? 'MEI' : 'Não'} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Consultas oficiais avançadas (SintegraWS — opcional/complementar) */}
           <div className="bg-white border border-slate-200 rounded-2xl p-6">
             <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900 mb-1">
               <span className="text-blue-600">{icons.shield('w-5 h-5')}</span>
-              Consultas oficiais em tempo real
+              Consultas complementares em tempo real
             </h3>
             <p className="text-sm text-slate-500 mb-4">
-              Via SintegraWS — cada consulta consome créditos do pacote contratado. Resultados repetidos em até 24h
-              vêm do cache sem custo.
+              {data._fonte === 'cnpja'
+                ? 'Os dados acima já vêm do CNPJá. Use os botões abaixo (via SintegraWS) apenas se precisar do espelho em tempo real direto do órgão.'
+                : 'Via SintegraWS — cada consulta consome créditos do pacote contratado. Resultados repetidos em até 24h vêm do cache sem custo.'}
             </p>
             <div className="space-y-3">
               <OfficialPanel
@@ -604,29 +713,14 @@ function TabCNPJ() {
               />
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 -mt-1">
                 Atenção: a consulta SINTEGRA de São Paulo é instável, pois a Sefaz-SP não integra o convênio nacional
-                (o dado sai do CADESP, que restringe acesso automatizado). Para empresas de SP, o status básico da IE
-                já aparece na seção "Inscrições estaduais" acima. Para os demais estados, a consulta abaixo funciona
-                normalmente.
+                (o dado sai do CADESP, que restringe acesso automatizado). Para empresas de SP, o status da IE já
+                aparece na seção "Inscrições estaduais" acima.
               </p>
-              <OfficialPanel
-                title="Simples Nacional"
-                subtitle="Opção pelo Simples/SIMEI e períodos de enquadramento"
-                icon={icons.percent}
-                endpoint={`/api/sws/simples?cnpj=${digits}`}
-                disabled={!digits}
-              />
               <OfficialPanel
                 title="Suframa"
                 subtitle="Inscrição e situação na Zona Franca de Manaus"
                 icon={icons.globe}
                 endpoint={`/api/sws/suframa?cnpj=${digits}`}
-                disabled={!digits}
-              />
-              <OfficialPanel
-                title="Receita Federal (espelho oficial)"
-                subtitle="Comprovante de inscrição direto da RFB via SintegraWS"
-                icon={icons.fileText}
-                endpoint={`/api/sws/rf?cnpj=${digits}`}
                 disabled={!digits}
               />
             </div>
