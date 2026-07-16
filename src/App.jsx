@@ -232,7 +232,6 @@ function OfficialPanel({ title, subtitle, icon, endpoint, disabled }) {
         setState({ loading: false, data, error: '' })
       }
     } catch (e) {
-      if (e.unauthorized) window.dispatchEvent(new Event('need-key'))
       setState({ loading: false, data: null, error: e.message === 'unauthorized' ? 'Chave de acesso necessária.' : e.message })
     }
   }
@@ -602,6 +601,12 @@ function TabCNPJ() {
                 endpoint={`/api/sws/sintegra?cnpj=${digits}`}
                 disabled={!digits}
               />
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 -mt-1">
+                Atenção: a consulta SINTEGRA de São Paulo é instável, pois a Sefaz-SP não integra o convênio nacional
+                (o dado sai do CADESP, que restringe acesso automatizado). Para empresas de SP, o status básico da IE
+                já aparece na seção "Inscrições estaduais" acima. Para os demais estados, a consulta abaixo funciona
+                normalmente.
+              </p>
               <OfficialPanel
                 title="Simples Nacional"
                 subtitle="Opção pelo Simples/SIMEI e períodos de enquadramento"
@@ -717,7 +722,6 @@ function TabCPF() {
         setState({ loading: false, data, error: '' })
       }
     } catch (e) {
-      if (e.unauthorized) window.dispatchEvent(new Event('need-key'))
       setState({ loading: false, data: null, error: e.message === 'unauthorized' ? 'Chave de acesso necessária.' : e.message })
     }
   }
@@ -798,41 +802,61 @@ function TabCPF() {
   )
 }
 
-// ---------- Modal de chave de acesso ----------
-function KeyModal({ onSave, onClose }) {
-  const [key, setKey] = useState(getKey())
+// ---------- Tela de login (bloqueia o site) ----------
+function LoginGate({ onOk }) {
+  const [key, setKey] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const entrar = async () => {
+    if (!key.trim()) return
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch('/api/verify', { headers: { 'x-access-key': key } })
+      if (res.ok) {
+        localStorage.setItem('access_key', key)
+        onOk()
+      } else {
+        setError('Chave de acesso incorreta.')
+      }
+    } catch {
+      setError('Falha de conexão. Tente novamente.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-        <div className="flex items-center gap-3 mb-3">
-          <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            {icons.lock('w-5 h-5')}
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm max-w-sm w-full p-8">
+        <div className="flex flex-col items-center text-center mb-6">
+          <span className="w-14 h-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center mb-4">
+            {icons.shield('w-7 h-7')}
           </span>
-          <h3 className="font-semibold text-slate-900">Chave de acesso</h3>
+          <h1 className="text-xl font-bold text-slate-900">Central de Consultas Fiscais</h1>
+          <p className="text-sm text-slate-500 mt-1">Acesso restrito. Informe a chave de acesso para continuar.</p>
         </div>
-        <p className="text-sm text-slate-500 mb-4">
-          As consultas oficiais consomem créditos pagos, por isso o acesso é restrito. Informe a chave definida pelo
-          administrador do sistema.
-        </p>
-        <input
-          type="password"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && onSave(key)}
-          placeholder="Chave de acesso"
-          className="w-full px-4 py-3 rounded-xl border border-slate-200 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <div className="flex gap-2 justify-end">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium">
-            Cancelar
-          </button>
-          <button
-            onClick={() => onSave(key)}
-            className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-          >
-            Salvar
-          </button>
+        <div className="relative mb-3">
+          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">{icons.lock('w-5 h-5')}</span>
+          <input
+            type="password"
+            value={key}
+            autoFocus
+            onChange={(e) => setKey(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !loading && entrar()}
+            placeholder="Chave de acesso"
+            className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
+        {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+        <button
+          onClick={entrar}
+          disabled={loading}
+          className="w-full py-3 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-60 transition-colors"
+        >
+          {loading ? 'Verificando...' : 'Entrar'}
+        </button>
       </div>
     </div>
   )
@@ -841,13 +865,40 @@ function KeyModal({ onSave, onClose }) {
 // ---------- App ----------
 export default function App() {
   const [tab, setTab] = useState('cnpj')
-  const [keyOpen, setKeyOpen] = useState(false)
+  // gate: 'loading' | 'open' (sem proteção) | 'locked' | 'ok'
+  const [gate, setGate] = useState('loading')
+
+  const checkAccess = async () => {
+    try {
+      const health = await fetch('/api/health').then((r) => r.json())
+      if (!health.protected) return setGate('open')
+      const res = await fetch('/api/verify', { headers: { 'x-access-key': getKey() } })
+      setGate(res.ok ? 'ok' : 'locked')
+    } catch {
+      setGate('locked')
+    }
+  }
 
   useEffect(() => {
-    const open = () => setKeyOpen(true)
-    window.addEventListener('need-key', open)
-    return () => window.removeEventListener('need-key', open)
+    checkAccess()
   }, [])
+
+  const sair = () => {
+    localStorage.removeItem('access_key')
+    setGate('locked')
+  }
+
+  if (gate === 'loading') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (gate === 'locked') return <LoginGate onOk={() => setGate('ok')} />
+
+  const protectedMode = gate === 'ok'
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -860,15 +911,16 @@ export default function App() {
             </span>
             <span className="font-bold text-slate-900">Central de Consultas Fiscais</span>
           </div>
-          <div className="flex items-center gap-3">
+          {protectedMode && (
             <button
-              onClick={() => setKeyOpen(true)}
-              className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
-              title="Chave de acesso"
+              onClick={sair}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 text-sm font-medium transition-colors"
+              title="Sair"
             >
-              {icons.lock('w-5 h-5')}
+              {icons.lock('w-4 h-4')}
+              Sair
             </button>
-          </div>
+          )}
         </div>
       </nav>
 
@@ -906,16 +958,6 @@ export default function App() {
           comprovantes oficiais dos órgãos emissores.
         </footer>
       </div>
-
-      {keyOpen && (
-        <KeyModal
-          onSave={(k) => {
-            localStorage.setItem('access_key', k)
-            setKeyOpen(false)
-          }}
-          onClose={() => setKeyOpen(false)}
-        />
-      )}
     </div>
   )
 }

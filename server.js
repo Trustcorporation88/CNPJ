@@ -98,6 +98,9 @@ async function sws(params, res, { cacheable = true } = {}) {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, protected: Boolean(ACCESS_KEY) }))
 
+// Valida a chave de acesso (usado pela tela de login)
+app.get('/api/verify', auth, (_req, res) => res.json({ ok: true }))
+
 app.get('/api/saldo', auth, async (_req, res) => {
   if (!SINTEGRA_TOKEN) return res.status(500).json({ error: 'SINTEGRA_TOKEN não configurado no servidor.' })
   try {
