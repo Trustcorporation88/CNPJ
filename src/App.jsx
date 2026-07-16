@@ -134,11 +134,20 @@ const prettyLabel = (key) =>
     .replace(/\b\w/g, (c) => c.toUpperCase())
 
 // ---------- Acesso à API do backend ----------
-const getKey = () => localStorage.getItem('access_key') || ''
+// Duas fontes de chave:
+//  - adminKey: persistida (admin loga uma vez e usa tudo)
+//  - clientKey em memória: digitada pelo funcionário, válida só na sessão atual
+const getAdminKey = () => localStorage.getItem('access_key') || ''
+let sessionClientKey = ''
+const setSessionClientKey = (k) => { sessionClientKey = k }
+// A chave enviada: admin tem prioridade; senão usa a do funcionário
+const activeKey = () => getAdminKey() || sessionClientKey
+// compat com chamadas antigas
+const getKey = () => activeKey()
 
-async function api(path) {
+async function api(path, keyOverride) {
   const res = await fetch(path, {
-    headers: { 'x-access-key': getKey() },
+    headers: { 'x-access-key': keyOverride ?? activeKey() },
     signal: AbortSignal.timeout(30000),
   }).catch((e) => {
     if (e?.name === 'TimeoutError' || /abort/i.test(String(e)))
@@ -468,13 +477,148 @@ function Skeleton() {
 }
 
 // ---------- Aba CNPJ ----------
-function TabCNPJ() {
+// Modal que pede a senha do funcionário para liberar as consultas pagas do CNPJ atual
+function ClientKeyModal({ onOk, onClose }) {
+  const [key, setKey] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const liberar = async () => {
+    if (!key.trim()) return
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch('/api/verify', { headers: { 'x-access-key': key } })
+      if (res.ok) {
+        setSessionClientKey(key)
+        onOk()
+      } else {
+        setError('Senha incorreta.')
+      }
+    } catch {
+      setError('Falha de conexão. Tente novamente.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="flex items-center gap-3 mb-3">
+          <span className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+            {icons.lock('w-5 h-5')}
+          </span>
+          <h3 className="font-semibold text-slate-900">Liberar consultas pagas</h3>
+        </div>
+        <p className="text-sm text-slate-500 mb-4">
+          As próximas consultas deste CNPJ consomem créditos pagos. Digite a senha para confirmar. A liberação vale
+          apenas para este CNPJ — ao consultar outro, a senha será pedida novamente.
+        </p>
+        <div className="relative mb-3">
+          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">{icons.lock('w-5 h-5')}</span>
+          <input
+            type="password"
+            value={key}
+            autoFocus
+            onChange={(e) => setKey(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !loading && liberar()}
+            placeholder="Senha de consulta"
+            className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium">
+            Cancelar
+          </button>
+          <button
+            onClick={liberar}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
+          >
+            {loading ? 'Verificando...' : 'Liberar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Painel que emite/baixa um PDF (comprovante oficial)
+function PdfPanel({ title, subtitle, endpoint, disabled }) {
+  const [state, setState] = useState({ loading: false, url: null, error: '' })
+  const emitir = async () => {
+    setState({ loading: true, url: null, error: '' })
+    try {
+      const res = await fetch(endpoint, { headers: { 'x-access-key': getKey() } })
+      if (res.status === 401) {
+        window.dispatchEvent(new Event('need-key'))
+        setState({ loading: false, url: null, error: 'Informe a senha para liberar as consultas pagas.' })
+        return
+      }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setState({ loading: false, url: null, error: d.error || `Erro ao emitir (HTTP ${res.status}).` })
+        return
+      }
+      const blob = await res.blob()
+      setState({ loading: false, url: URL.createObjectURL(blob), error: '' })
+    } catch {
+      setState({ loading: false, url: null, error: 'Falha de conexão ao emitir o comprovante.' })
+    }
+  }
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="shrink-0 w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+            {icons.fileText('w-4 h-4')}
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-800">{title}</p>
+            <p className="text-xs text-slate-500">{subtitle}</p>
+          </div>
+        </div>
+        <button
+          onClick={emitir}
+          disabled={state.loading || disabled}
+          className="shrink-0 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          {state.loading ? 'Emitindo...' : 'Emitir PDF'}
+        </button>
+      </div>
+      {state.error && (
+        <div className="px-4 py-3 text-sm text-red-700 bg-red-50 border-t border-red-100">{state.error}</div>
+      )}
+      {state.url && (
+        <div className="px-4 py-3 border-t border-slate-200 flex items-center gap-3">
+          <a
+            href={state.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-600 text-blue-600 text-sm font-medium hover:bg-blue-50"
+          >
+            {icons.fileText('w-4 h-4')}
+            Abrir comprovante
+          </a>
+          <span className="text-xs text-slate-400">Comprovante gerado. Abra ou salve o PDF.</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TabCNPJ({ isAdmin, clientKeyRequired }) {
   const [input, setInput] = useState('')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [jsonOpen, setJsonOpen] = useState(false)
   const [cardOpen, setCardOpen] = useState(false)
+  // Liberação das consultas pagas para o CNPJ atual (admin já vem liberado)
+  const [paidUnlocked, setPaidUnlocked] = useState(false)
+  const [askKey, setAskKey] = useState(false)
 
   const consultar = async () => {
     const digits = input.replace(/\D/g, '')
@@ -487,6 +631,8 @@ function TabCNPJ() {
     setData(null)
     setJsonOpen(false)
     setCardOpen(false)
+    setPaidUnlocked(isAdmin) // admin já liberado; funcionário precisa digitar por CNPJ
+    setAskKey(false)
     try {
       // Fonte principal: CNPJá (traz cadastral + inscrições estaduais + Simples numa só chamada).
       // Se não estiver configurado/autorizado, cai para a base pública gratuita.
@@ -680,35 +826,71 @@ function TabCNPJ() {
               Só gastam crédito quando você clica. Tentamos primeiro o SintegraWS (créditos já pagos) e, se ele não
               responder, o CNPJá assume automaticamente. Resultados repetidos em até 24h vêm do cache sem custo.
             </p>
-            <div className="space-y-3">
-              <OfficialPanel
-                title="Inscrição Estadual (detalhada)"
-                subtitle="Situação da IE na Sefaz — SintegraWS, com CNPJá de reserva"
-                icon={icons.card}
-                endpoint={`/api/ie?cnpj=${digits}`}
-                disabled={!digits}
-              />
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 -mt-1">
-                Para empresas de SP, o SintegraWS costuma falhar (a Sefaz-SP não integra o convênio nacional); nesse
-                caso o resultado vem do CNPJá automaticamente. O status básico da IE também já aparece na seção
-                "Inscrições estaduais" acima, de graça.
-              </p>
-              <OfficialPanel
-                title="Simples Nacional / MEI"
-                subtitle="Opção pelo Simples e enquadramento no MEI"
-                icon={icons.percent}
-                endpoint={`/api/simples?cnpj=${digits}`}
-                disabled={!digits}
-              />
-              <OfficialPanel
-                title="Suframa"
-                subtitle="Inscrição e situação na Zona Franca de Manaus"
-                icon={icons.globe}
-                endpoint={`/api/suframa?cnpj=${digits}`}
-                disabled={!digits}
-              />
-            </div>
+
+            {clientKeyRequired && !paidUnlocked ? (
+              <div className="text-center py-8 bg-slate-50 border border-dashed border-slate-300 rounded-xl">
+                <div className="mx-auto w-12 h-12 rounded-full bg-white border border-slate-200 flex items-center justify-center mb-3 text-slate-400">
+                  {icons.lock('w-6 h-6')}
+                </div>
+                <p className="text-sm text-slate-600 mb-1">As consultas pagas deste CNPJ estão bloqueadas.</p>
+                <p className="text-xs text-slate-400 mb-4">
+                  Cada consulta consome crédito. Informe a senha para liberá-las neste CNPJ.
+                </p>
+                <button
+                  onClick={() => setAskKey(true)}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  {icons.lock('w-4 h-4')}
+                  Liberar consultas pagas
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <OfficialPanel
+                  title="Inscrição Estadual (detalhada)"
+                  subtitle="Situação da IE na Sefaz — SintegraWS, com CNPJá de reserva"
+                  icon={icons.card}
+                  endpoint={`/api/ie?cnpj=${digits}`}
+                  disabled={!digits}
+                />
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 -mt-1">
+                  Para empresas de SP, o SintegraWS costuma falhar (a Sefaz-SP não integra o convênio nacional); nesse
+                  caso o resultado vem do CNPJá automaticamente. O status básico da IE também já aparece na seção
+                  "Inscrições estaduais" acima, de graça.
+                </p>
+                <OfficialPanel
+                  title="Simples Nacional / MEI"
+                  subtitle="Opção pelo Simples e enquadramento no MEI"
+                  icon={icons.percent}
+                  endpoint={`/api/simples?cnpj=${digits}`}
+                  disabled={!digits}
+                />
+                <OfficialPanel
+                  title="Suframa"
+                  subtitle="Inscrição e situação na Zona Franca de Manaus"
+                  icon={icons.globe}
+                  endpoint={`/api/suframa?cnpj=${digits}`}
+                  disabled={!digits}
+                />
+                <PdfPanel
+                  title="Comprovante Receita Federal (PDF oficial)"
+                  subtitle="Emite o comprovante de inscrição da RFB em PDF (via CNPJá)"
+                  endpoint={`/api/comprovante-rf?cnpj=${digits}`}
+                  disabled={!digits}
+                />
+              </div>
+            )}
           </div>
+
+          {askKey && (
+            <ClientKeyModal
+              onOk={() => {
+                setPaidUnlocked(true)
+                setAskKey(false)
+              }}
+              onClose={() => setAskKey(false)}
+            />
+          )}
 
           {/* Atividades secundárias */}
           {est?.atividades_secundarias?.length > 0 && (
@@ -884,7 +1066,7 @@ function TabCPF() {
 
 // ---------- Modal de chave (pedido só nas consultas pagas) ----------
 function KeyModal({ onSave, onClose }) {
-  const [key, setKey] = useState(getKey())
+  const [key, setKey] = useState(getAdminKey())
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -895,10 +1077,15 @@ function KeyModal({ onSave, onClose }) {
     try {
       const res = await fetch('/api/verify', { headers: { 'x-access-key': key } })
       if (res.ok) {
+        const d = await res.json()
+        if (d.role !== 'admin') {
+          setError('Esta é a senha de consulta, não a de administrador. Use a senha de admin aqui.')
+          return
+        }
         localStorage.setItem('access_key', key)
         onSave()
       } else {
-        setError('Chave de acesso incorreta.')
+        setError('Senha de administrador incorreta.')
       }
     } catch {
       setError('Falha de conexão. Tente novamente.')
@@ -912,13 +1099,13 @@ function KeyModal({ onSave, onClose }) {
       <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
         <div className="flex items-center gap-3 mb-3">
           <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            {icons.lock('w-5 h-5')}
+            {icons.shield('w-5 h-5')}
           </span>
-          <h3 className="font-semibold text-slate-900">Chave de acesso</h3>
+          <h3 className="font-semibold text-slate-900">Entrar como administrador</h3>
         </div>
         <p className="text-sm text-slate-500 mb-4">
-          As consultas oficiais consomem créditos pagos. Informe a chave definida pelo administrador para liberá-las.
-          A consulta cadastral do CNPJ continua livre.
+          O administrador loga uma vez e usa todas as consultas pagas sem digitar senha a cada CNPJ. Funcionários não
+          precisam entrar aqui — a senha de consulta é pedida direto ao usar cada CNPJ.
         </p>
         <div className="relative mb-3">
           <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">{icons.lock('w-5 h-5')}</span>
@@ -928,7 +1115,7 @@ function KeyModal({ onSave, onClose }) {
             autoFocus
             onChange={(e) => setKey(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && !loading && salvar()}
-            placeholder="Chave de acesso"
+            placeholder="Senha de administrador"
             className="w-full pl-11 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -942,7 +1129,7 @@ function KeyModal({ onSave, onClose }) {
             disabled={loading}
             className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
           >
-            {loading ? 'Verificando...' : 'Liberar consultas'}
+            {loading ? 'Verificando...' : 'Entrar'}
           </button>
         </div>
       </div>
@@ -954,12 +1141,43 @@ function KeyModal({ onSave, onClose }) {
 export default function App() {
   const [tab, setTab] = useState('cnpj')
   const [keyOpen, setKeyOpen] = useState(false)
+  const [role, setRole] = useState(null) // 'admin' | 'client' | null
+  const [health, setHealth] = useState({ adminKey: false, clientKey: false })
+
+  const checkRole = async () => {
+    try {
+      const h = await fetch('/api/health').then((r) => r.json())
+      setHealth(h)
+      if (getAdminKey()) {
+        const res = await fetch('/api/verify', { headers: { 'x-access-key': getAdminKey() } })
+        if (res.ok) {
+          const d = await res.json()
+          setRole(d.role)
+          return
+        }
+        localStorage.removeItem('access_key')
+      }
+      setRole(null)
+    } catch {
+      setRole(null)
+    }
+  }
 
   useEffect(() => {
+    checkRole()
     const open = () => setKeyOpen(true)
     window.addEventListener('need-key', open)
     return () => window.removeEventListener('need-key', open)
   }, [])
+
+  const isAdmin = role === 'admin'
+  // Funcionário precisa digitar senha por CNPJ quando: existe CLIENT_KEY no servidor e o usuário não é admin
+  const clientKeyRequired = (health.clientKey || health.adminKey) && !isAdmin
+
+  const sairAdmin = () => {
+    localStorage.removeItem('access_key')
+    setRole(null)
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -972,13 +1190,25 @@ export default function App() {
             </span>
             <span className="font-bold text-slate-900">Central de Consultas Fiscais</span>
           </div>
-          <button
-            onClick={() => setKeyOpen(true)}
-            className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
-            title="Chave de acesso das consultas pagas"
-          >
-            {icons.lock('w-5 h-5')}
-          </button>
+          {isAdmin ? (
+            <button
+              onClick={sairAdmin}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 text-sm font-medium transition-colors"
+              title="Sair do modo administrador"
+            >
+              {icons.lock('w-4 h-4')}
+              Admin • Sair
+            </button>
+          ) : (
+            <button
+              onClick={() => setKeyOpen(true)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 text-sm font-medium transition-colors"
+              title="Entrar como administrador"
+            >
+              {icons.lock('w-4 h-4')}
+              Entrar como admin
+            </button>
+          )}
         </div>
       </nav>
 
@@ -1009,15 +1239,27 @@ export default function App() {
           ))}
         </div>
 
-        {tab === 'cnpj' ? <TabCNPJ /> : <TabCPF />}
+        {tab === 'cnpj' ? (
+          <TabCNPJ isAdmin={isAdmin} clientKeyRequired={clientKeyRequired} />
+        ) : (
+          <TabCPF />
+        )}
 
         <footer className="text-center text-xs text-slate-400 mt-12 pb-8">
-          Dados públicos: publica.cnpj.ws • Consultas oficiais: SintegraWS • Documentos gerados não substituem os
-          comprovantes oficiais dos órgãos emissores.
+          Dados públicos: publica.cnpj.ws • Consultas oficiais: SintegraWS + CNPJá • Documentos gerados não substituem
+          os comprovantes oficiais dos órgãos emissores.
         </footer>
       </div>
 
-      {keyOpen && <KeyModal onSave={() => setKeyOpen(false)} onClose={() => setKeyOpen(false)} />}
+      {keyOpen && (
+        <KeyModal
+          onSave={() => {
+            setKeyOpen(false)
+            checkRole()
+          }}
+          onClose={() => setKeyOpen(false)}
+        />
+      )}
     </div>
   )
 }

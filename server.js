@@ -9,7 +9,8 @@ const PORT = process.env.PORT || 3000
 const SINTEGRA_TOKEN = process.env.SINTEGRA_TOKEN || ''
 const CNPJA_TOKEN = process.env.CNPJA_TOKEN || ''
 const CNPJA_BASE = 'https://api.cnpja.com'
-const ACCESS_KEY = process.env.ACCESS_KEY || ''
+const ACCESS_KEY = process.env.ACCESS_KEY || '' // senha do admin
+const CLIENT_KEY = process.env.CLIENT_KEY || '' // senha do funcionário/cliente
 const SWS_BASE = 'https://www.sintegraws.com.br/api/v1'
 
 // ---------- Cache simples em memória (24h) para não gastar créditos repetidos ----------
@@ -26,10 +27,15 @@ const cacheGet = (key) => {
 }
 const cacheSet = (key, v) => cache.set(key, { v, t: Date.now() })
 
-// ---------- Proteção por chave de acesso (se ACCESS_KEY estiver definida) ----------
+// ---------- Proteção por chave (admin OU cliente liberam consultas pagas) ----------
+const keyOf = (req) => req.headers['x-access-key'] || ''
+const isAdmin = (req) => ACCESS_KEY && keyOf(req) === ACCESS_KEY
+const isClient = (req) => CLIENT_KEY && keyOf(req) === CLIENT_KEY
+
 const auth = (req, res, next) => {
-  if (!ACCESS_KEY) return next()
-  if (req.headers['x-access-key'] === ACCESS_KEY) return next()
+  // Sem nenhuma chave configurada no servidor => acesso livre
+  if (!ACCESS_KEY && !CLIENT_KEY) return next()
+  if (isAdmin(req) || isClient(req)) return next()
   res.status(401).json({ error: 'Chave de acesso inválida ou ausente.' })
 }
 
@@ -112,10 +118,16 @@ async function sws(params, res, opts) {
   sendResult(res, await swsCore(params, opts))
 }
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, protected: Boolean(ACCESS_KEY) }))
+app.get('/api/health', (_req, res) =>
+  res.json({ ok: true, adminKey: Boolean(ACCESS_KEY), clientKey: Boolean(CLIENT_KEY) })
+)
 
-// Valida a chave de acesso (usado pela tela de login)
-app.get('/api/verify', auth, (_req, res) => res.json({ ok: true }))
+// Valida a chave e informa o papel (admin/cliente)
+app.get('/api/verify', (req, res) => {
+  if (isAdmin(req)) return res.json({ ok: true, role: 'admin' })
+  if (isClient(req)) return res.json({ ok: true, role: 'client' })
+  res.status(401).json({ error: 'Chave de acesso inválida.' })
+})
 
 app.get('/api/saldo', auth, async (_req, res) => {
   if (!SINTEGRA_TOKEN) return res.status(500).json({ error: 'SINTEGRA_TOKEN não configurado no servidor.' })
@@ -262,6 +274,28 @@ app.get('/api/simples', auth, (req, res) => {
   const cnpj = onlyDigits(req.query.cnpj)
   if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' })
   comFallback(res, { cnpj, plugin: 'SN' }, { simples: 'true' }, cnpj)
+})
+
+// Comprovante oficial da Receita Federal em PDF (via CNPJá) — retorna o binário do PDF
+app.get('/api/comprovante-rf', auth, async (req, res) => {
+  const cnpj = onlyDigits(req.query.cnpj)
+  if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' })
+  if (!CNPJA_TOKEN) return res.status(500).json({ error: 'CNPJA_TOKEN não configurado no servidor.' })
+  try {
+    const r = await fetch(`${CNPJA_BASE}/rfb/certificate?taxId=${cnpj}&pages=REGISTRATION`, {
+      headers: { Authorization: CNPJA_TOKEN, Accept: 'application/pdf' },
+      signal: AbortSignal.timeout(20000),
+    })
+    if (r.status === 401) return res.status(500).json({ error: 'Chave do CNPJá inválida (verifique CNPJA_TOKEN).' })
+    if (r.status === 402) return res.status(500).json({ error: 'Créditos do CNPJá esgotados.' })
+    if (!r.ok) return res.status(500).json({ error: `CNPJá respondeu HTTP ${r.status} ao emitir o comprovante.` })
+    const buf = Buffer.from(await r.arrayBuffer())
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `inline; filename="comprovante-${cnpj}.pdf"`)
+    res.send(buf)
+  } catch (e) {
+    res.status(500).json({ error: 'Falha ao emitir o comprovante no CNPJá.', detail: String(e) })
+  }
 })
 
 // ---------- Frontend estático ----------
