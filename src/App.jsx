@@ -139,7 +139,7 @@ const getKey = () => localStorage.getItem('access_key') || ''
 async function api(path) {
   const res = await fetch(path, {
     headers: { 'x-access-key': getKey() },
-    signal: AbortSignal.timeout(95000),
+    signal: AbortSignal.timeout(30000),
   }).catch((e) => {
     if (e?.name === 'TimeoutError' || /abort/i.test(String(e)))
       throw new Error('A consulta demorou demais para responder (o órgão de origem pode estar lento). Tente novamente.')

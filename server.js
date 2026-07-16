@@ -42,7 +42,7 @@ const SWS_HEADERS = {
 }
 
 // GET via https nativo, forçando IPv4 (family: 4) — evita travas de rota IPv6 no host
-function httpsGet(url, timeoutMs = 42000) {
+function httpsGet(url, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { headers: SWS_HEADERS, family: 4, timeout: timeoutMs }, (r) => {
       let body = ''
@@ -65,7 +65,8 @@ async function swsCore(params, { cacheable = true } = {}) {
   }
   const url = `${SWS_BASE}/execute-api.php?${qs}`
   let lastErr
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  // Uma única tentativa curta: se o SintegraWS não responder rápido, o fallback assume
+  for (let attempt = 1; attempt <= 1; attempt++) {
     try {
       const r = await httpsGet(url)
       let data
@@ -95,8 +96,8 @@ async function swsCore(params, { cacheable = true } = {}) {
   return {
     ok: false,
     error: timedOut
-      ? 'O SintegraWS demorou para responder mesmo após 2 tentativas (órgão possivelmente instável).'
-      : 'Falha de conexão do servidor com o SintegraWS após 2 tentativas.',
+      ? 'O SintegraWS não respondeu rápido (órgão possivelmente instável).'
+      : 'Falha de conexão do servidor com o SintegraWS.',
     detail: `${lastErr?.code ?? ''} ${lastErr?.message ?? ''}`.trim(),
   }
 }
@@ -173,11 +174,11 @@ async function cnpjaCore(cnpj, query) {
   const qs = new URLSearchParams(query).toString()
   const url = `${CNPJA_BASE}/office/${cnpj}${qs ? `?${qs}` : ''}`
   let lastErr
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 1; attempt++) {
     try {
       const r = await fetch(url, {
         headers: { Authorization: CNPJA_TOKEN, Accept: 'application/json' },
-        signal: AbortSignal.timeout(42000),
+        signal: AbortSignal.timeout(15000),
       })
       const text = await r.text()
       let data
@@ -199,7 +200,7 @@ async function cnpjaCore(cnpj, query) {
   }
   return {
     ok: false,
-    error: 'Falha de conexão do servidor com o CNPJá após 2 tentativas.',
+    error: 'Falha de conexão do servidor com o CNPJá.',
     detail: `${lastErr?.name ?? ''} ${lastErr?.message ?? ''}`.trim(),
   }
 }
