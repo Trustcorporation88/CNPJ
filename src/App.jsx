@@ -313,9 +313,19 @@ function OfficialPanel({ title, subtitle, icon, endpoint, disabled }) {
       )}
       {state.data && (
         <div className="px-4 py-4 border-t border-slate-200">
-          {state.data._cache && (
-            <p className="text-xs text-slate-400 mb-2">Resultado em cache (não consumiu crédito)</p>
+          {state.data._fallback && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+              O SintegraWS não respondeu, então o resultado veio automaticamente do CNPJá.
+            </p>
           )}
+          <div className="flex items-center gap-2 mb-3 text-xs">
+            {state.data._cache && (
+              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Cache · não gastou crédito</span>
+            )}
+            {state.data._provedor && (
+              <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">Fonte: {state.data._provedor}</span>
+            )}
+          </div>
           <KVTable data={state.data} />
         </div>
       )}
@@ -660,67 +670,41 @@ function TabCNPJ() {
             </div>
           )}
 
-          {/* Simples Nacional / SIMEI — já vem na consulta CNPJá */}
-          {data._fonte === 'cnpja' && (data._simples || data._simei) && (
-            <div className="bg-white border border-slate-200 rounded-2xl p-6">
-              <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900 mb-4">
-                <span className="text-blue-600">{icons.percent('w-5 h-5')}</span>
-                Regime tributário
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Simples Nacional</p>
-                    <p className="text-sm font-medium text-slate-800">
-                      {data._simples?.optant ? 'Optante' : 'Não optante'}
-                      {data._simples?.since ? ` desde ${formatDate(data._simples.since)}` : ''}
-                    </p>
-                  </div>
-                  <StatusBadge ok={!!data._simples?.optant} label={data._simples?.optant ? 'Sim' : 'Não'} />
-                </div>
-                <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-400">MEI (SIMEI)</p>
-                    <p className="text-sm font-medium text-slate-800">
-                      {data._simei?.optant ? 'Enquadrado como MEI' : 'Não é MEI'}
-                      {data._simei?.since ? ` desde ${formatDate(data._simei.since)}` : ''}
-                    </p>
-                  </div>
-                  <StatusBadge ok={!!data._simei?.optant} label={data._simei?.optant ? 'MEI' : 'Não'} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Consultas oficiais avançadas (SintegraWS — opcional/complementar) */}
+          {/* Consultas pagas sob demanda (SintegraWS → CNPJá automático) */}
           <div className="bg-white border border-slate-200 rounded-2xl p-6">
             <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900 mb-1">
               <span className="text-blue-600">{icons.shield('w-5 h-5')}</span>
-              Consultas complementares em tempo real
+              Consultas pagas sob demanda
             </h3>
             <p className="text-sm text-slate-500 mb-4">
-              {data._fonte === 'cnpja'
-                ? 'Os dados acima já vêm do CNPJá. Use os botões abaixo (via SintegraWS) apenas se precisar do espelho em tempo real direto do órgão.'
-                : 'Via SintegraWS — cada consulta consome créditos do pacote contratado. Resultados repetidos em até 24h vêm do cache sem custo.'}
+              Só gastam crédito quando você clica. Tentamos primeiro o SintegraWS (créditos já pagos) e, se ele não
+              responder, o CNPJá assume automaticamente. Resultados repetidos em até 24h vêm do cache sem custo.
             </p>
             <div className="space-y-3">
               <OfficialPanel
-                title="SINTEGRA — Inscrição Estadual"
-                subtitle="Situação detalhada da IE na Sefaz (habilitada, inapta, cancelada...)"
+                title="Inscrição Estadual (detalhada)"
+                subtitle="Situação da IE na Sefaz — SintegraWS, com CNPJá de reserva"
                 icon={icons.card}
-                endpoint={`/api/sws/sintegra?cnpj=${digits}`}
+                endpoint={`/api/ie?cnpj=${digits}`}
                 disabled={!digits}
               />
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 -mt-1">
-                Atenção: a consulta SINTEGRA de São Paulo é instável, pois a Sefaz-SP não integra o convênio nacional
-                (o dado sai do CADESP, que restringe acesso automatizado). Para empresas de SP, o status da IE já
-                aparece na seção "Inscrições estaduais" acima.
+                Para empresas de SP, o SintegraWS costuma falhar (a Sefaz-SP não integra o convênio nacional); nesse
+                caso o resultado vem do CNPJá automaticamente. O status básico da IE também já aparece na seção
+                "Inscrições estaduais" acima, de graça.
               </p>
+              <OfficialPanel
+                title="Simples Nacional / MEI"
+                subtitle="Opção pelo Simples e enquadramento no MEI"
+                icon={icons.percent}
+                endpoint={`/api/simples?cnpj=${digits}`}
+                disabled={!digits}
+              />
               <OfficialPanel
                 title="Suframa"
                 subtitle="Inscrição e situação na Zona Franca de Manaus"
                 icon={icons.globe}
-                endpoint={`/api/sws/suframa?cnpj=${digits}`}
+                endpoint={`/api/suframa?cnpj=${digits}`}
                 disabled={!digits}
               />
             </div>

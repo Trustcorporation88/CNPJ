@@ -54,15 +54,14 @@ function httpsGet(url, timeoutMs = 42000) {
   })
 }
 
-async function sws(params, res, { cacheable = true } = {}) {
-  if (!SINTEGRA_TOKEN) {
-    return res.status(500).json({ error: 'SINTEGRA_TOKEN não configurado no servidor.' })
-  }
+// Núcleo: retorna { ok, data } ou { ok:false, error, detail, status } — não escreve na resposta
+async function swsCore(params, { cacheable = true } = {}) {
+  if (!SINTEGRA_TOKEN) return { ok: false, error: 'SINTEGRA_TOKEN não configurado no servidor.' }
   const qs = new URLSearchParams({ token: SINTEGRA_TOKEN, ...params })
-  const cacheKey = new URLSearchParams(params).toString()
+  const cacheKey = 'sws:' + new URLSearchParams(params).toString()
   if (cacheable) {
     const hit = cacheGet(cacheKey)
-    if (hit) return res.json({ ...hit, _cache: true })
+    if (hit) return { ok: true, data: { ...hit, _cache: true } }
   }
   const url = `${SWS_BASE}/execute-api.php?${qs}`
   let lastErr
@@ -73,29 +72,43 @@ async function sws(params, res, { cacheable = true } = {}) {
       try {
         data = JSON.parse(r.body)
       } catch {
-        // O SintegraWS às vezes devolve uma página HTML de erro (ex.: empresa sem registro
-        // naquele serviço, ou órgão fora do ar). Traduz para mensagem amigável.
         const isHtml = /<html|<!doctype/i.test(r.body)
-        return res.status(500).json({
+        return {
+          ok: false,
           error: isHtml
             ? 'Sem registro nesse serviço para este CNPJ, ou o órgão de origem está indisponível no momento.'
             : `SintegraWS respondeu HTTP ${r.status} com conteúdo não-JSON.`,
           detail: isHtml ? '' : r.body.slice(0, 300),
-        })
+        }
       }
-      if (cacheable && (data.code === '0' || data.status === 'OK')) cacheSet(cacheKey, data)
-      return res.json(data)
+      // O SintegraWS usa code "0" para sucesso; qualquer outro é falha lógica
+      if (data.code && data.code !== '0' && data.status !== 'OK') {
+        return { ok: false, error: data.message || 'Consulta não retornou dados.', logical: true, data }
+      }
+      if (cacheable) cacheSet(cacheKey, data)
+      return { ok: true, data }
     } catch (e) {
       lastErr = e
     }
   }
   const timedOut = /TIMEOUT/i.test(String(lastErr))
-  res.status(500).json({
+  return {
+    ok: false,
     error: timedOut
-      ? 'O SintegraWS demorou mais de 60s para responder, mesmo após 2 tentativas (órgão possivelmente instável).'
+      ? 'O SintegraWS demorou para responder mesmo após 2 tentativas (órgão possivelmente instável).'
       : 'Falha de conexão do servidor com o SintegraWS após 2 tentativas.',
     detail: `${lastErr?.code ?? ''} ${lastErr?.message ?? ''}`.trim(),
-  })
+  }
+}
+
+// Wrapper que escreve a resposta HTTP a partir do resultado do core
+function sendResult(res, result) {
+  if (result.ok) return res.json(result.data)
+  return res.status(500).json({ error: result.error, detail: result.detail })
+}
+
+async function sws(params, res, opts) {
+  sendResult(res, await swsCore(params, opts))
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, protected: Boolean(ACCESS_KEY) }))
@@ -149,15 +162,13 @@ app.get('/api/sws/cpf', auth, (req, res) => {
   sws({ cpf, 'data-nascimento': nasc, plugin: 'CPF' }, res)
 })
 
-// ---------- CNPJá (provedor comercial preferencial) ----------
-// Uma única chamada a /office/{cnpj} traz tudo; parâmetros ligam cada serviço.
-async function cnpja(cnpj, query, res) {
-  if (!CNPJA_TOKEN) {
-    return res.status(500).json({ error: 'CNPJA_TOKEN não configurado no servidor.' })
-  }
+// ---------- CNPJá ----------
+// Núcleo: retorna { ok, data } ou { ok:false, error, detail }
+async function cnpjaCore(cnpj, query) {
+  if (!CNPJA_TOKEN) return { ok: false, error: 'CNPJA_TOKEN não configurado no servidor.' }
   const cacheKey = `cnpja:${cnpj}:${new URLSearchParams(query).toString()}`
   const hit = cacheGet(cacheKey)
-  if (hit) return res.json({ ...hit, _cache: true })
+  if (hit) return { ok: true, data: { ...hit, _cache: true } }
 
   const qs = new URLSearchParams(query).toString()
   const url = `${CNPJA_BASE}/office/${cnpj}${qs ? `?${qs}` : ''}`
@@ -173,39 +184,83 @@ async function cnpja(cnpj, query, res) {
       try {
         data = JSON.parse(text)
       } catch {
-        return res.status(500).json({ error: `CNPJá respondeu HTTP ${r.status} inesperado.`, detail: text.slice(0, 300) })
+        return { ok: false, error: `CNPJá respondeu HTTP ${r.status} inesperado.`, detail: text.slice(0, 300) }
       }
-      if (r.status === 401) return res.status(500).json({ error: 'Chave do CNPJá inválida (verifique CNPJA_TOKEN).' })
-      if (r.status === 402) return res.status(500).json({ error: 'Créditos do CNPJá esgotados.' })
-      if (r.status === 429) return res.status(500).json({ error: 'Limite de consultas por minuto do CNPJá excedido. Aguarde um instante.' })
-      if (r.status === 404) return res.status(500).json({ error: 'CNPJ não encontrado na base do CNPJá.' })
-      if (!r.ok) return res.status(500).json({ error: data?.message || `CNPJá respondeu HTTP ${r.status}.` })
+      if (r.status === 401) return { ok: false, error: 'Chave do CNPJá inválida (verifique CNPJA_TOKEN).' }
+      if (r.status === 402) return { ok: false, error: 'Créditos do CNPJá esgotados.' }
+      if (r.status === 429) return { ok: false, error: 'Limite de consultas por minuto do CNPJá excedido. Aguarde um instante.' }
+      if (r.status === 404) return { ok: false, error: 'CNPJ não encontrado na base do CNPJá.' }
+      if (!r.ok) return { ok: false, error: data?.message || `CNPJá respondeu HTTP ${r.status}.` }
       cacheSet(cacheKey, data)
-      return res.json(data)
+      return { ok: true, data }
     } catch (e) {
       lastErr = e
     }
   }
-  res.status(500).json({
+  return {
+    ok: false,
     error: 'Falha de conexão do servidor com o CNPJá após 2 tentativas.',
     detail: `${lastErr?.name ?? ''} ${lastErr?.message ?? ''}`.trim(),
-  })
+  }
 }
 
-// Consulta unificada: cadastral sempre; simples/registrations/suframa conforme flags
-app.get('/api/cnpja/office', auth, (req, res) => {
+// Consulta unificada CNPJá: cadastral + flags opcionais
+app.get('/api/cnpja/office', auth, async (req, res) => {
   const cnpj = onlyDigits(req.query.cnpj)
   if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' })
   const q = {}
   if (req.query.simples === 'true') q.simples = 'true'
   if (req.query.registrations) q.registrations = String(req.query.registrations).toUpperCase()
   if (req.query.suframa === 'true') q.suframa = 'true'
-  // CACHE_IF_FRESH com maxAge curto = quase tempo real, mas reaproveita cache recente sem gastar crédito
   if (req.query.fresh === 'true') {
     q.strategy = 'CACHE_IF_FRESH'
     q.maxAge = '1'
   }
-  cnpja(cnpj, q, res)
+  sendResult(res, await cnpjaCore(cnpj, q))
+})
+
+// ---------- Consultas com FALLBACK automático ----------
+// Tenta o SintegraWS primeiro (consome os créditos já pagos). Se falhar por
+// indisponibilidade/timeout, cai automaticamente no CNPJá. O campo _provedor
+// e _fallback informam ao front de onde veio o dado.
+async function comFallback(res, swsParams, cnpjaFlags, cnpjNum) {
+  const sw = await swsCore(swsParams)
+  if (sw.ok) return res.json({ ...sw.data, _provedor: 'SintegraWS' })
+
+  // SintegraWS falhou — tenta CNPJá se estiver configurado
+  if (CNPJA_TOKEN) {
+    const cj = await cnpjaCore(cnpjNum, cnpjaFlags)
+    if (cj.ok) {
+      return res.json({ ...cj.data, _provedor: 'CNPJá', _fallback: true, _motivoSintegra: sw.error })
+    }
+    return res.status(500).json({
+      error: `SintegraWS indisponível e o CNPJá também não respondeu. (Sintegra: ${sw.error} | CNPJá: ${cj.error})`,
+    })
+  }
+  return res.status(500).json({ error: sw.error, detail: sw.detail })
+}
+
+// SINTEGRA (IE detalhada) → fallback para CNPJá com inscrições do estado de origem
+app.get('/api/ie', auth, (req, res) => {
+  const cnpj = onlyDigits(req.query.cnpj)
+  if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' })
+  const swsParams = { cnpj, plugin: 'ST' }
+  if (req.query.uf) swsParams.uf = String(req.query.uf).toUpperCase().slice(0, 2)
+  comFallback(res, swsParams, { registrations: 'ALL' }, cnpj)
+})
+
+// Suframa → fallback para CNPJá com suframa=true
+app.get('/api/suframa', auth, (req, res) => {
+  const cnpj = onlyDigits(req.query.cnpj)
+  if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' })
+  comFallback(res, { cnpj, plugin: 'SF' }, { suframa: 'true' }, cnpj)
+})
+
+// Simples Nacional → fallback para CNPJá com simples=true
+app.get('/api/simples', auth, (req, res) => {
+  const cnpj = onlyDigits(req.query.cnpj)
+  if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' })
+  comFallback(res, { cnpj, plugin: 'SN' }, { simples: 'true' }, cnpj)
 })
 
 // ---------- Frontend estático ----------
