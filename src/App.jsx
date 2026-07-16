@@ -85,7 +85,14 @@ const prettyLabel = (key) =>
 const getKey = () => localStorage.getItem('access_key') || ''
 
 async function api(path) {
-  const res = await fetch(path, { headers: { 'x-access-key': getKey() } })
+  const res = await fetch(path, {
+    headers: { 'x-access-key': getKey() },
+    signal: AbortSignal.timeout(95000),
+  }).catch((e) => {
+    if (e?.name === 'TimeoutError' || /abort/i.test(String(e)))
+      throw new Error('A consulta demorou demais para responder (o órgão de origem pode estar lento). Tente novamente.')
+    throw new Error('Falha de conexão. Verifique sua internet e tente novamente.')
+  })
   const data = await res.json().catch(() => ({}))
   if (res.status === 401) throw Object.assign(new Error('unauthorized'), { unauthorized: true })
   if (!res.ok) {
@@ -123,16 +130,62 @@ function StatusBadge({ ok, label }) {
   )
 }
 
+const LABELS = {
+  cnpj: 'CNPJ',
+  cnpj_matriz: 'CNPJ Matriz',
+  cpf: 'CPF',
+  ie: 'Inscrição Estadual',
+  nome_empresarial: 'Nome Empresarial',
+  nome: 'Nome',
+  fantasia: 'Nome Fantasia',
+  situacao_simples_nacional: 'Situação Simples Nacional',
+  situacao_simples_nacional_anterior: 'Simples Nacional (anterior)',
+  situacao_simei: 'Situação SIMEI',
+  situacao_simei_anterior: 'SIMEI (anterior)',
+  eventos_futuros_simples_nacional: 'Eventos Futuros Simples Nacional',
+  eventos_futuros_simples_simei: 'Eventos Futuros SIMEI',
+  situacao_cadastral: 'Situação Cadastral',
+  tipo_logradouro: 'Tipo de Logradouro',
+  cep: 'CEP',
+  uf: 'UF',
+  municipio: 'Município',
+  bairro: 'Bairro',
+  logradouro: 'Logradouro',
+  numero: 'Número',
+  complemento: 'Complemento',
+  telefone: 'Telefone',
+  email: 'E-mail',
+  data_abertura: 'Data de Abertura',
+  atividade_economica: 'Atividade Econômica',
+}
+
+// Campos de controle interno que não interessam ao usuário
+const IGNORE_KEYS = new Set([
+  'code', 'status', 'message', 'version', '_cache', 'machine', 'return',
+  'agendamentos', 'data-nascimento', 'token',
+])
+// Valores que representam "vazio" e devem ser ocultados
+const isBlank = (v) => {
+  const s = String(v).trim()
+  return s === '' || s === '*******' || s === '********' || /^\*+$/.test(s) || s.toLowerCase() === 'null'
+}
+
+const applyLabel = (key) => LABELS[key] || prettyLabel(key)
+
 // Renderiza qualquer resposta do SintegraWS como tabela chave-valor
 function KVTable({ data }) {
-  const IGNORE = new Set(['code', 'status', 'message', 'version', '_cache'])
   const scalars = []
   const complex = []
   Object.entries(data || {}).forEach(([k, v]) => {
-    if (IGNORE.has(k)) return
-    if (v === null || v === undefined || v === '') return
-    if (typeof v === 'object') complex.push([k, v])
-    else scalars.push([k, v])
+    if (IGNORE_KEYS.has(k.toLowerCase())) return
+    if (v === null || v === undefined) return
+    if (typeof v === 'object') {
+      if (Array.isArray(v) && v.length === 0) return
+      complex.push([k, v])
+    } else {
+      if (isBlank(v)) return
+      scalars.push([k, v])
+    }
   })
   return (
     <div className="space-y-3">
@@ -140,7 +193,7 @@ function KVTable({ data }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
           {scalars.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-3 text-sm border-b border-slate-100 py-1.5">
-              <span className="text-slate-500">{prettyLabel(k)}</span>
+              <span className="text-slate-500">{applyLabel(k)}</span>
               <span className="text-slate-900 font-medium text-right break-words">{String(v)}</span>
             </div>
           ))}
@@ -148,7 +201,7 @@ function KVTable({ data }) {
       )}
       {complex.map(([k, v]) => (
         <div key={k} className="border border-slate-200 rounded-xl p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">{prettyLabel(k)}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">{applyLabel(k)}</p>
           {Array.isArray(v) ? (
             <ul className="space-y-2">
               {v.map((item, i) => (

@@ -40,7 +40,7 @@ const SWS_HEADERS = {
 }
 
 // GET via https nativo, forçando IPv4 (family: 4) — evita travas de rota IPv6 no host
-function httpsGet(url, timeoutMs = 60000) {
+function httpsGet(url, timeoutMs = 42000) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { headers: SWS_HEADERS, family: 4, timeout: timeoutMs }, (r) => {
       let body = ''
@@ -71,10 +71,14 @@ async function sws(params, res, { cacheable = true } = {}) {
       try {
         data = JSON.parse(r.body)
       } catch {
-        // Nota: status 500 (e não 502/504) para o corpo atravessar o proxy do Cloudflare intacto
+        // O SintegraWS às vezes devolve uma página HTML de erro (ex.: empresa sem registro
+        // naquele serviço, ou órgão fora do ar). Traduz para mensagem amigável.
+        const isHtml = /<html|<!doctype/i.test(r.body)
         return res.status(500).json({
-          error: `SintegraWS respondeu HTTP ${r.status} com conteúdo não-JSON.`,
-          detail: r.body.slice(0, 300),
+          error: isHtml
+            ? 'Sem registro nesse serviço para este CNPJ, ou o órgão de origem está indisponível no momento.'
+            : `SintegraWS respondeu HTTP ${r.status} com conteúdo não-JSON.`,
+          detail: isHtml ? '' : r.body.slice(0, 300),
         })
       }
       if (cacheable && (data.code === '0' || data.status === 'OK')) cacheSet(cacheKey, data)
