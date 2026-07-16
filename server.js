@@ -32,9 +32,24 @@ const auth = (req, res, next) => {
 }
 
 // ---------- Helper para chamar o SintegraWS ----------
+import https from 'node:https'
+
 const SWS_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 CentralConsultas/1.0',
   Accept: 'application/json, text/plain, */*',
+}
+
+// GET via https nativo, forçando IPv4 (family: 4) — evita travas de rota IPv6 no host
+function httpsGet(url, timeoutMs = 60000) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: SWS_HEADERS, family: 4, timeout: timeoutMs }, (r) => {
+      let body = ''
+      r.on('data', (c) => (body += c))
+      r.on('end', () => resolve({ status: r.statusCode, body }))
+    })
+    req.on('timeout', () => req.destroy(new Error('TIMEOUT')))
+    req.on('error', reject)
+  })
 }
 
 async function sws(params, res, { cacheable = true } = {}) {
@@ -47,33 +62,34 @@ async function sws(params, res, { cacheable = true } = {}) {
     const hit = cacheGet(cacheKey)
     if (hit) return res.json({ ...hit, _cache: true })
   }
-  try {
-    const r = await fetch(`${SWS_BASE}/execute-api.php?${qs}`, {
-      headers: SWS_HEADERS,
-      signal: AbortSignal.timeout(60000),
-    })
-    const text = await r.text()
-    let data
+  const url = `${SWS_BASE}/execute-api.php?${qs}`
+  let lastErr
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      data = JSON.parse(text)
-    } catch {
-      return res.status(502).json({
-        error: `SintegraWS respondeu HTTP ${r.status} com conteúdo inesperado.`,
-        detail: text.slice(0, 300),
-      })
+      const r = await httpsGet(url)
+      let data
+      try {
+        data = JSON.parse(r.body)
+      } catch {
+        // Nota: status 500 (e não 502/504) para o corpo atravessar o proxy do Cloudflare intacto
+        return res.status(500).json({
+          error: `SintegraWS respondeu HTTP ${r.status} com conteúdo não-JSON.`,
+          detail: r.body.slice(0, 300),
+        })
+      }
+      if (cacheable && (data.code === '0' || data.status === 'OK')) cacheSet(cacheKey, data)
+      return res.json(data)
+    } catch (e) {
+      lastErr = e
     }
-    // code "0" = sucesso na convenção do SintegraWS; só cacheia sucesso
-    if (cacheable && (data.code === '0' || data.status === 'OK')) cacheSet(cacheKey, data)
-    res.json(data)
-  } catch (e) {
-    const timedOut = e?.name === 'TimeoutError' || /timeout/i.test(String(e))
-    res.status(502).json({
-      error: timedOut
-        ? 'O SintegraWS demorou mais de 60s para responder (órgão possivelmente instável). Tente novamente.'
-        : 'Falha de conexão do servidor com o SintegraWS.',
-      detail: `${e?.name ?? ''} ${e?.message ?? ''} ${e?.cause?.code ?? ''}`.trim(),
-    })
   }
+  const timedOut = /TIMEOUT/i.test(String(lastErr))
+  res.status(500).json({
+    error: timedOut
+      ? 'O SintegraWS demorou mais de 60s para responder, mesmo após 2 tentativas (órgão possivelmente instável).'
+      : 'Falha de conexão do servidor com o SintegraWS após 2 tentativas.',
+    detail: `${lastErr?.code ?? ''} ${lastErr?.message ?? ''}`.trim(),
+  })
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, protected: Boolean(ACCESS_KEY) }))
@@ -84,7 +100,7 @@ app.get('/api/saldo', auth, async (_req, res) => {
     const r = await fetch(`${SWS_BASE}/consulta-saldo.php?token=${SINTEGRA_TOKEN}`)
     res.json(await r.json())
   } catch (e) {
-    res.status(502).json({ error: 'Falha ao consultar saldo.', detail: String(e) })
+    res.status(500).json({ error: 'Falha ao consultar saldo.', detail: String(e) })
   }
 })
 
