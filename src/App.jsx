@@ -174,6 +174,23 @@ function CartaoCNPJ({ data, endereco, onClose }) {
               <Campo label="Situação cadastral" value={est?.situacao_cadastral} />
               <Campo label="Data da situação cadastral" value={formatDate(est?.data_situacao_cadastral)} />
               <Campo label="Última atualização" value={formatDate(data.atualizado_em?.slice(0, 10))} />
+              {est?.inscricoes_estaduais?.length > 0 && (
+                <div className="col-span-3 border border-slate-300 rounded px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    Inscrições estaduais
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {est.inscricoes_estaduais.map((ie, i) => (
+                      <li key={i} className="text-sm text-slate-900">
+                        {ie.estado?.sigla ?? '—'} — IE {ie.inscricao_estadual} —{' '}
+                        <span className={ie.ativo ? 'text-green-700 font-medium' : 'text-red-700 font-medium'}>
+                          {ie.ativo ? 'Ativa' : 'Inativa'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
             {data.socios?.length > 0 && (
@@ -361,6 +378,46 @@ export default function App() {
                 <InfoCard icon={icons.mail} label="E-mail" value={est?.email} className="sm:col-span-2 lg:col-span-3" />
               </div>
             </div>
+
+            {/* Inscrições estaduais */}
+            {est?.inscricoes_estaduais?.length > 0 && (
+              <div className="bg-white border border-slate-200 rounded-2xl p-6">
+                <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900 mb-4">
+                  <span className="text-blue-600">{icons.card('w-5 h-5')}</span>
+                  Inscrições estaduais
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {est.inscricoes_estaduais.map((ie, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="shrink-0 w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-sm font-bold">
+                          {ie.estado?.sigla ?? '—'}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Inscrição estadual</p>
+                          <p className="text-sm font-medium text-slate-800 truncate">{ie.inscricao_estadual}</p>
+                        </div>
+                      </div>
+                      <span
+                        className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                          ie.ativo ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${ie.ativo ? 'bg-green-500' : 'bg-red-500'}`} />
+                        {ie.ativo ? 'Ativa' : 'Inativa'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-400 mt-3">
+                  Status conforme base pública do Cadastro Sincronizado. Para situação detalhada (inapta, suspensa,
+                  cancelada), consulte a Sefaz do estado (ex.: CADESP em SP).
+                </p>
+              </div>
+            )}
 
             {/* Atividades secundárias */}
             {est?.atividades_secundarias?.length > 0 && (
