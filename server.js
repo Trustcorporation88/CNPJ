@@ -32,6 +32,11 @@ const auth = (req, res, next) => {
 }
 
 // ---------- Helper para chamar o SintegraWS ----------
+const SWS_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 CentralConsultas/1.0',
+  Accept: 'application/json, text/plain, */*',
+}
+
 async function sws(params, res, { cacheable = true } = {}) {
   if (!SINTEGRA_TOKEN) {
     return res.status(500).json({ error: 'SINTEGRA_TOKEN não configurado no servidor.' })
@@ -43,19 +48,31 @@ async function sws(params, res, { cacheable = true } = {}) {
     if (hit) return res.json({ ...hit, _cache: true })
   }
   try {
-    const r = await fetch(`${SWS_BASE}/execute-api.php?${qs}`)
+    const r = await fetch(`${SWS_BASE}/execute-api.php?${qs}`, {
+      headers: SWS_HEADERS,
+      signal: AbortSignal.timeout(60000),
+    })
     const text = await r.text()
     let data
     try {
       data = JSON.parse(text)
     } catch {
-      return res.status(502).json({ error: 'Resposta inesperada do SintegraWS.', raw: text.slice(0, 500) })
+      return res.status(502).json({
+        error: `SintegraWS respondeu HTTP ${r.status} com conteúdo inesperado.`,
+        detail: text.slice(0, 300),
+      })
     }
     // code "0" = sucesso na convenção do SintegraWS; só cacheia sucesso
     if (cacheable && (data.code === '0' || data.status === 'OK')) cacheSet(cacheKey, data)
     res.json(data)
   } catch (e) {
-    res.status(502).json({ error: 'Falha ao contatar o SintegraWS.', detail: String(e) })
+    const timedOut = e?.name === 'TimeoutError' || /timeout/i.test(String(e))
+    res.status(502).json({
+      error: timedOut
+        ? 'O SintegraWS demorou mais de 60s para responder (órgão possivelmente instável). Tente novamente.'
+        : 'Falha de conexão do servidor com o SintegraWS.',
+      detail: `${e?.name ?? ''} ${e?.message ?? ''} ${e?.cause?.code ?? ''}`.trim(),
+    })
   }
 }
 

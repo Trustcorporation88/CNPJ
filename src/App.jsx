@@ -88,7 +88,10 @@ async function api(path) {
   const res = await fetch(path, { headers: { 'x-access-key': getKey() } })
   const data = await res.json().catch(() => ({}))
   if (res.status === 401) throw Object.assign(new Error('unauthorized'), { unauthorized: true })
-  if (!res.ok) throw new Error(data.error || 'Erro na consulta.')
+  if (!res.ok) {
+    const msg = [data.error || `Erro na consulta (HTTP ${res.status}).`, data.detail].filter(Boolean).join(' — ')
+    throw new Error(msg)
+  }
   return data
 }
 
@@ -371,6 +374,10 @@ function TabCNPJ() {
     setCardOpen(false)
     try {
       const res = await fetch(`https://publica.cnpj.ws/cnpj/${digits}`)
+      if (res.status === 400) {
+        setError('CNPJ inválido (dígito verificador não confere). Revise o número digitado.')
+        return
+      }
       if (res.status === 404) {
         setError('CNPJ não encontrado na base da Receita Federal. Verifique o número e tente novamente.')
         return
