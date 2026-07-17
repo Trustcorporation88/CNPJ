@@ -61,7 +61,7 @@ function httpsGet(url, timeoutMs = 8000) {
 }
 
 // Núcleo: retorna { ok, data } ou { ok:false, error, detail, status } — não escreve na resposta
-async function swsCore(params, { cacheable = true } = {}) {
+async function swsCore(params, { cacheable = true, timeoutMs = 8000 } = {}) {
   if (!SINTEGRA_TOKEN) return { ok: false, error: 'SINTEGRA_TOKEN não configurado no servidor.' }
   const qs = new URLSearchParams({ token: SINTEGRA_TOKEN, ...params })
   const cacheKey = 'sws:' + new URLSearchParams(params).toString()
@@ -71,10 +71,10 @@ async function swsCore(params, { cacheable = true } = {}) {
   }
   const url = `${SWS_BASE}/execute-api.php?${qs}`
   let lastErr
-  // Uma única tentativa curta: se o SintegraWS não responder rápido, o fallback assume
+  // Uma única tentativa: se o SintegraWS não responder no tempo, o fallback (quando houver) assume
   for (let attempt = 1; attempt <= 1; attempt++) {
     try {
-      const r = await httpsGet(url)
+      const r = await httpsGet(url, timeoutMs)
       let data
       try {
         data = JSON.parse(r.body)
@@ -167,12 +167,18 @@ app.get('/api/sws/suframa', auth, (req, res) => {
   sws({ cnpj, plugin: 'SF' }, res)
 })
 
-app.get('/api/sws/cpf', auth, (req, res) => {
+app.get('/api/sws/cpf', auth, async (req, res) => {
   const cpf = onlyDigits(req.query.cpf)
   const nasc = onlyDigits(req.query.nascimento) // ddmmaaaa
-  if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido.' })
+  if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Digite os 11 dígitos.' })
   if (nasc.length !== 8) return res.status(400).json({ error: 'Data de nascimento inválida (use dd/mm/aaaa).' })
-  sws({ cpf, 'data-nascimento': nasc, plugin: 'CPF' }, res)
+  // CPF só existe no SintegraWS (CNPJá não consulta CPF) — sem fallback, então damos mais tempo (25s)
+  const r = await swsCore({ cpf, 'data-nascimento': nasc, plugin: 'CPF' }, { timeoutMs: 25000 })
+  if (r.ok) return res.json({ ...r.data, _provedor: 'SintegraWS' })
+  res.status(500).json({
+    error: `${r.error} A consulta de CPF depende só do SintegraWS (não há fonte alternativa). Tente novamente em instantes.`,
+    detail: r.detail,
+  })
 })
 
 // ---------- CNPJá ----------
