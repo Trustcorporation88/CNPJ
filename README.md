@@ -51,7 +51,22 @@ antiga e a nova coexistem, então reserve cerca de 3x o tamanho final. Com SP e 
 e 800 MB (tabela + índices), ou seja, uns 2,5 GB livres na carga; o Brasil inteiro fica em torno de 3 a 4 vezes
 isso. Ajuste o disco em *Project Settings > Compute and Disk* antes de sincronizar.
 
-### Atualizar todo mês
+### Atualização automática (GitHub Actions)
+
+O workflow `.github/workflows/atualizar-base.yml` roda todo dia às 06:00 (Brasília). Ele confere se a Receita
+publicou um mês mais novo e completo do que o que está no Supabase (`scripts/verificar-mes-receita.js`). Se publicou,
+baixa, monta a base e roda o `sincronizar`, tudo na máquina do GitHub; nos outros dias termina em segundos.
+
+Para ligar, em *Settings > Secrets and variables > Actions* do repositório:
+
+- *Secrets*: `SUPABASE_SYNC_URL` com a conexão do `cnpj_sync` (a mesma do comando abaixo).
+- *Variables* (opcionais): `UFS` (padrão `SP`; ex.: `SP,MG,RJ` ou `TODAS`) e `MESES` (padrão `24`).
+
+Para rodar na hora, em *Actions > Atualizar base da Receita > Run workflow* (marque "forcar" para recarregar o mesmo
+mês, por exemplo depois de mudar `UFS`). Se uma execução falhar, o GitHub avisa por e-mail e a base anterior continua
+no site.
+
+### Atualizar à mão
 
 Depois que a Receita publicar a pasta nova, num computador com uns 20 GB livres:
 

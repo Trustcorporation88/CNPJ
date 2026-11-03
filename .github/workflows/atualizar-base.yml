@@ -1,0 +1,73 @@
+name: Atualizar base da Receita
+
+# Todo dia confere se a Receita publicou um mês novo do CNPJ. Se publicou, baixa, monta a base
+# e envia para o Supabase (aba "Novas empresas"). Nos outros dias termina em poucos segundos.
+#
+# Configuração em Settings > Secrets and variables > Actions:
+#   secret   SUPABASE_SYNC_URL  conexão do usuário cnpj_sync (pooler, porta 5432)
+#   variável UFS                opcional, padrão SP (ex.: SP,MG,RJ ou TODAS)
+#   variável MESES              opcional, padrão 24
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # 06:00 em Brasília
+  workflow_dispatch:
+    inputs:
+      forcar:
+        description: 'Atualizar mesmo que o Supabase já esteja com o mês mais recente'
+        type: boolean
+        default: false
+
+concurrency:
+  group: atualizar-base
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      SUPABASE_SYNC_URL: ${{ secrets.SUPABASE_SYNC_URL }}
+      UFS: ${{ vars.UFS || 'SP' }}
+      MESES: ${{ vars.MESES || '24' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verificar mês novo na Receita
+        id: verificar
+        env:
+          FORCAR: ${{ inputs.forcar || 'false' }}
+        run: node scripts/verificar-mes-receita.js
+
+      # O download e a importação precisam de uns 20 GB; o runner vem com ferramentas que não usamos.
+      - name: Liberar espaço em disco
+        if: steps.verificar.outputs.novo == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/boost
+          sudo docker image prune --all --force > /dev/null
+          df -h /
+
+      - name: Baixar e montar a base (${{ steps.verificar.outputs.mes }})
+        if: steps.verificar.outputs.novo == 'true'
+        env:
+          RADAR_CNPJ_DB: ${{ runner.temp }}/radar/radar.duckdb
+        run: |
+          if [ "$(echo "$UFS" | tr a-z A-Z)" = "TODAS" ]; then alvo="--todas"; else alvo="--ufs $UFS"; fi
+          npx radar-cnpj-mcp baixar $alvo --mes "${{ steps.verificar.outputs.mes }}"
+
+      - name: Enviar ao Supabase
+        if: steps.verificar.outputs.novo == 'true'
+        env:
+          RADAR_CNPJ_DB: ${{ runner.temp }}/radar/radar.duckdb
+        run: npm run sincronizar
