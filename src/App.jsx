@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // ---------- Ícones (SVG inline) ----------
 const Icon = ({ path, className = 'w-5 h-5' }) => (
@@ -1178,7 +1178,99 @@ function Opcao({ checked, onChange, children }) {
   )
 }
 
-function TabNovasEmpresas() {
+const formatGB = (b) => `${(b / 1024 ** 3).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} GB`
+
+// Admin: baixa a base (radar.duckdb) do Cloudflare R2 para o servidor
+function AtualizarBasePanel({ onConcluido }) {
+  const [st, setSt] = useState(null)
+  const [erro, setErro] = useState('')
+  const emAndamento = st && (st.estado === 'baixando' || st.estado === 'validando')
+  const onConcluidoRef = useRef(onConcluido)
+  onConcluidoRef.current = onConcluido
+
+  const carregar = async () => {
+    try {
+      setSt(await api('/api/novas-empresas/atualizacao'))
+    } catch (e) {
+      setErro(e.message)
+    }
+  }
+
+  useEffect(() => {
+    carregar()
+  }, [])
+
+  useEffect(() => {
+    if (!emAndamento) return
+    const timer = setInterval(async () => {
+      try {
+        const s = await api('/api/novas-empresas/atualizacao')
+        setSt(s)
+        if (s.estado === 'concluido') onConcluidoRef.current()
+      } catch {
+        /* tenta de novo no próximo ciclo */
+      }
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [emAndamento])
+
+  const iniciar = async () => {
+    if (!confirm('Baixar a base do Cloudflare R2 e substituir a atual?')) return
+    setErro('')
+    try {
+      const r = await fetch('/api/novas-empresas/atualizar', {
+        method: 'POST',
+        headers: { 'x-access-key': activeKey() },
+      })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok && r.status !== 409) throw new Error(d.error || `Erro (HTTP ${r.status}).`)
+      setSt(d)
+    } catch (e) {
+      setErro(e.message)
+    }
+  }
+
+  const pct = st?.total ? Math.min(100, Math.round((st.baixados / st.total) * 100)) : null
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="text-sm">
+          <p className="font-semibold text-slate-800">Atualizar base (admin)</p>
+          <p className="text-xs text-slate-500">
+            {st?.origem ? `Origem: ${st.origem}` : 'Origem não configurada no servidor (variáveis R2_*).'}
+          </p>
+        </div>
+        <button
+          onClick={iniciar}
+          disabled={!st?.origem || emAndamento}
+          className="shrink-0 px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-900 disabled:opacity-50"
+        >
+          {emAndamento ? 'Atualizando...' : 'Atualizar base agora'}
+        </button>
+      </div>
+      {st?.estado === 'baixando' && (
+        <div>
+          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full bg-blue-600 transition-all" style={{ width: `${pct ?? 5}%` }} />
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Baixando {formatGB(st.baixados)}
+            {st.total ? ` de ${formatGB(st.total)} (${pct}%)` : ''}...
+          </p>
+        </div>
+      )}
+      {st?.estado === 'validando' && <p className="text-xs text-slate-500">Conferindo o arquivo baixado...</p>}
+      {st?.estado === 'concluido' && (
+        <p className="text-xs text-green-700">Base atualizada em {new Date(st.terminado_em).toLocaleString('pt-BR')}.</p>
+      )}
+      {st?.estado === 'erro' && <p className="text-xs text-red-700">Falha na atualização: {st.erro}</p>}
+      {erro && <p className="text-xs text-red-700">{erro}</p>}
+    </div>
+  )
+}
+
+function TabNovasEmpresas({ isAdmin }) {
   const [base, setBase] = useState({ loading: true, data: null, error: '' })
   const [askKey, setAskKey] = useState(false)
   const [tipos, setTipos] = useState(['mei'])
@@ -1313,6 +1405,8 @@ function TabNovasEmpresas() {
           onClose={() => setAskKey(false)}
         />
       )}
+
+      {isAdmin && <AtualizarBasePanel onConcluido={carregarBase} />}
 
       {/* Situação da base */}
       {base.loading ? (
@@ -1749,7 +1843,7 @@ export default function App() {
 
         {tab === 'cnpj' && <TabCNPJ isAdmin={isAdmin} clientKeyRequired={clientKeyRequired} />}
         {tab === 'cpf' && <TabCPF />}
-        {tab === 'novas' && <TabNovasEmpresas />}
+        {tab === 'novas' && <TabNovasEmpresas isAdmin={isAdmin} />}
 
         <footer className="text-center text-xs text-slate-400 mt-12 pb-8">
           Dados públicos: publica.cnpj.ws e Dados Abertos do CNPJ (Receita Federal) • Consultas oficiais: SintegraWS + CNPJá • Documentos gerados não substituem

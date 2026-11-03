@@ -55,7 +55,7 @@ async function conexao() {
   const versao = await versaoArquivo()
   if (!versao) {
     throw new ErroConsulta(
-      `Base da Receita não encontrada em ${DB_PATH}. Gere com: npx radar-cnpj-mcp baixar --ufs SP`,
+      `Base da Receita não encontrada em ${DB_PATH}. O administrador pode carregá-la em "Atualizar base agora" ou gerá-la com: npx radar-cnpj-mcp baixar --ufs SP`,
       503
     )
   }

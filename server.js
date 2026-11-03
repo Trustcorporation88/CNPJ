@@ -2,6 +2,7 @@ import express from 'express'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import * as novas from './novas-empresas.js'
+import { iniciarAtualizacao, statusAtualizacao } from './atualizar-base.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -336,6 +337,22 @@ app.get('/api/novas-empresas/csv', auth, async (req, res) => {
     res.send(conteudo)
   } catch (e) {
     erroNovas(res, e)
+  }
+})
+
+const somenteAdmin = (req, res, next) => {
+  if (isAdmin(req)) return next()
+  res.status(401).json({ error: 'Apenas o administrador pode atualizar a base.' })
+}
+
+app.get('/api/novas-empresas/atualizacao', somenteAdmin, (_req, res) => res.json(statusAtualizacao()))
+
+app.post('/api/novas-empresas/atualizar', somenteAdmin, (_req, res) => {
+  try {
+    const iniciado = iniciarAtualizacao()
+    res.status(iniciado ? 202 : 409).json({ iniciado, ...statusAtualizacao() })
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message })
   }
 })
 
