@@ -556,7 +556,12 @@ function Skeleton() {
 
 // ---------- Aba CNPJ ----------
 // Modal que pede a senha do funcionário para liberar as consultas pagas do CNPJ atual
-function ClientKeyModal({ onOk, onClose }) {
+function ClientKeyModal({
+  onOk,
+  onClose,
+  titulo = 'Liberar consultas pagas',
+  texto = 'As próximas consultas deste CNPJ consomem créditos pagos. Digite a senha para confirmar. A liberação vale apenas para este CNPJ — ao consultar outro, a senha será pedida novamente.',
+}) {
   const [key, setKey] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -587,12 +592,9 @@ function ClientKeyModal({ onOk, onClose }) {
           <span className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
             {icons.lock('w-5 h-5')}
           </span>
-          <h3 className="font-semibold text-slate-900">Liberar consultas pagas</h3>
+          <h3 className="font-semibold text-slate-900">{titulo}</h3>
         </div>
-        <p className="text-sm text-slate-500 mb-4">
-          As próximas consultas deste CNPJ consomem créditos pagos. Digite a senha para confirmar. A liberação vale
-          apenas para este CNPJ — ao consultar outro, a senha será pedida novamente.
-        </p>
+        <p className="text-sm text-slate-500 mb-4">{texto}</p>
         <div className="relative mb-3">
           <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">{icons.lock('w-5 h-5')}</span>
           <input
@@ -1153,6 +1155,422 @@ function TabCPF() {
   )
 }
 
+// ---------- Aba Novas empresas (base local da Receita Federal) ----------
+const TIPOS_NOVAS = [
+  { id: 'mei', label: 'MEI' },
+  { id: 'micro', label: 'Microempresa' },
+  { id: 'individual', label: 'Empresário individual' },
+]
+const POR_PAGINA = 50
+const formatCnae = (c) => (c && c.length === 7 ? `${c.slice(0, 4)}-${c[4]}/${c.slice(5)}` : c || '')
+
+function Opcao({ checked, onChange, children }) {
+  return (
+    <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+      />
+      {children}
+    </label>
+  )
+}
+
+function TabNovasEmpresas() {
+  const [base, setBase] = useState({ loading: true, data: null, error: '' })
+  const [askKey, setAskKey] = useState(false)
+  const [tipos, setTipos] = useState(['mei'])
+  const [periodo, setPeriodo] = useState('semana')
+  const [de, setDe] = useState('')
+  const [ate, setAte] = useState('')
+  const [cnaes, setCnaes] = useState([]) // [{ codigo, descricao }]
+  const [termoCnae, setTermoCnae] = useState('')
+  const [sugestoes, setSugestoes] = useState([])
+  const [uf, setUf] = useState('')
+  const [municipio, setMunicipio] = useState('')
+  const [filiais, setFiliais] = useState(false)
+  const [secundario, setSecundario] = useState(false)
+  const [ocultarMei, setOcultarMei] = useState(false)
+  const [res, setRes] = useState({ loading: false, data: null, error: '' })
+  const [baixandoCsv, setBaixandoCsv] = useState(false)
+
+  const carregarBase = async () => {
+    setBase({ loading: true, data: null, error: '' })
+    try {
+      setBase({ loading: false, data: await api('/api/novas-empresas/status'), error: '' })
+    } catch (e) {
+      if (e.unauthorized) setAskKey(true)
+      setBase({ loading: false, data: null, error: e.unauthorized ? '' : e.message })
+    }
+  }
+
+  useEffect(() => {
+    carregarBase()
+  }, [])
+
+  useEffect(() => {
+    const t = termoCnae.trim()
+    if (t.length < 2 || !base.data) {
+      setSugestoes([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      try {
+        setSugestoes(await api(`/api/novas-empresas/cnaes?q=${encodeURIComponent(t)}`))
+      } catch {
+        setSugestoes([])
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [termoCnae, base.data])
+
+  const adicionarCnae = (c) => {
+    if (!cnaes.some((x) => x.codigo === c.codigo)) setCnaes([...cnaes, c])
+    setTermoCnae('')
+    setSugestoes([])
+  }
+
+  // Aceita um código digitado direto (ex.: 4520-0/01 ou 4520) sem escolher na lista
+  const adicionarCodigoDigitado = () => {
+    const digitos = termoCnae.replace(/\D/g, '')
+    if (digitos.length >= 2 && digitos.length <= 7 && /^[\d\s./-]+$/.test(termoCnae.trim())) {
+      adicionarCnae({ codigo: digitos, descricao: digitos.length < 7 ? 'Todos os CNAEs que começam com este código' : '' })
+    } else if (sugestoes.length > 0) {
+      adicionarCnae(sugestoes[0])
+    }
+  }
+
+  const query = (extra = {}) => {
+    const p = new URLSearchParams({ tipos: tipos.join(','), periodo })
+    if (periodo === 'personalizado') {
+      p.set('de', de)
+      p.set('ate', ate)
+    }
+    if (cnaes.length) p.set('cnaes', cnaes.map((c) => c.codigo).join(','))
+    if (uf) p.set('ufs', uf)
+    if (municipio.trim()) p.set('municipio', municipio.trim())
+    if (filiais) p.set('filiais', 'true')
+    if (secundario) p.set('secundario', 'true')
+    if (ocultarMei) p.set('ocultar_contatos_mei', 'true')
+    Object.entries(extra).forEach(([k, v]) => p.set(k, String(v)))
+    return p.toString()
+  }
+
+  const buscar = async (deslocamento = 0) => {
+    if (tipos.length === 0) return setRes({ loading: false, data: null, error: 'Escolha ao menos um tipo de empresa.' })
+    if (periodo === 'personalizado' && (!de || !ate))
+      return setRes({ loading: false, data: null, error: 'Informe a data inicial e a final.' })
+    setRes((r) => ({ ...r, loading: true, error: '' }))
+    try {
+      const data = await api(`/api/novas-empresas?${query({ limite: POR_PAGINA, deslocamento })}`)
+      setRes({ loading: false, data, error: '' })
+    } catch (e) {
+      if (e.unauthorized) setAskKey(true)
+      setRes({ loading: false, data: null, error: e.unauthorized ? 'Informe a senha para consultar.' : e.message })
+    }
+  }
+
+  const exportarCsv = async () => {
+    setBaixandoCsv(true)
+    try {
+      const r = await fetch(`/api/novas-empresas/csv?${query()}`, { headers: { 'x-access-key': activeKey() } })
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        throw new Error(d.error || `Erro ao exportar (HTTP ${r.status}).`)
+      }
+      const url = URL.createObjectURL(await r.blob())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `novas-empresas-${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setRes((s) => ({ ...s, error: e.message }))
+    } finally {
+      setBaixandoCsv(false)
+    }
+  }
+
+  const b = base.data
+  const d = res.data
+  const pagina = d ? Math.floor(d.deslocamento / d.limite) + 1 : 1
+  const paginas = d ? Math.max(1, Math.ceil(d.total / d.limite)) : 1
+  const inputCls =
+    'w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+
+  return (
+    <div className="space-y-6">
+      {askKey && (
+        <ClientKeyModal
+          titulo="Senha de acesso"
+          texto="A busca de novas empresas usa a base da Receita guardada no servidor. Digite a senha de consulta para continuar."
+          onOk={() => {
+            setAskKey(false)
+            carregarBase()
+          }}
+          onClose={() => setAskKey(false)}
+        />
+      )}
+
+      {/* Situação da base */}
+      {base.loading ? (
+        <div className="h-16 bg-white border border-slate-200 rounded-2xl animate-pulse" />
+      ) : b ? (
+        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-sm text-blue-900 flex items-start gap-3">
+          <span className="shrink-0 mt-0.5 text-blue-600">{icons.calendar('w-5 h-5')}</span>
+          <p>
+            Base da Receita Federal de <strong>{b.mes_referencia ?? '—'}</strong>
+            {b.ufs.length > 0 && <> ({b.ufs.join(', ')})</>}. A abertura mais recente na base é de{' '}
+            <strong>{formatDate(b.data_corte)}</strong>: "última semana" e "último mês" contam a partir dessa data. A
+            Receita publica os dados uma vez por mês, com algumas semanas de atraso.
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-2xl p-4">
+          <span className="shrink-0 mt-0.5">{icons.alert('w-5 h-5')}</span>
+          <div className="text-sm">
+            <p>{base.error || 'Informe a senha para consultar a base.'}</p>
+            <button onClick={() => (base.error ? carregarBase() : setAskKey(true))} className="mt-2 font-medium underline">
+              {base.error ? 'Tentar de novo' : 'Digitar senha'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Filtros */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Tipo de empresa</p>
+          <div className="flex flex-wrap gap-2">
+            {TIPOS_NOVAS.map((t) => {
+              const ativo = tipos.includes(t.id)
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setTipos(ativo ? tipos.filter((x) => x !== t.id) : [...tipos, t.id])}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    ativo ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-xs text-slate-400 mt-2">
+            Microempresa e empresário individual não incluem MEIs. Um empresário individual pode também ser microempresa.
+          </p>
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Abertas em</p>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} className={`${inputCls} sm:w-64`}>
+              <option value="semana">Última semana da base (7 dias)</option>
+              <option value="mes">Último mês da base (30 dias)</option>
+              <option value="personalizado">Período personalizado</option>
+            </select>
+            {periodo === 'personalizado' && (
+              <div className="flex gap-2 items-center">
+                <input type="date" value={de} onChange={(e) => setDe(e.target.value)} className={inputCls} />
+                <span className="text-slate-400 text-sm">até</span>
+                <input type="date" value={ate} onChange={(e) => setAte(e.target.value)} className={inputCls} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+            CNAEs <span className="normal-case font-normal text-slate-400">(opcional — sem CNAE, traz todas as atividades)</span>
+          </p>
+          {cnaes.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {cnaes.map((c) => (
+                <span
+                  key={c.codigo}
+                  title={c.descricao}
+                  className="inline-flex items-center gap-1.5 pl-3 pr-1.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium"
+                >
+                  {formatCnae(c.codigo)}
+                  {c.descricao && <span className="text-blue-500 font-normal max-w-48 truncate">{c.descricao}</span>}
+                  <button
+                    onClick={() => setCnaes(cnaes.filter((x) => x.codigo !== c.codigo))}
+                    aria-label={`Remover CNAE ${c.codigo}`}
+                    className="p-0.5 rounded-full hover:bg-blue-100"
+                  >
+                    {icons.close('w-3.5 h-3.5')}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="relative">
+            <input
+              value={termoCnae}
+              onChange={(e) => setTermoCnae(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && adicionarCodigoDigitado()}
+              placeholder='Digite a atividade (ex.: "oficina mecânica") ou o código (ex.: 4520-0/01)'
+              className={inputCls}
+            />
+            {sugestoes.length > 0 && (
+              <ul className="absolute z-10 mt-1 w-full max-h-64 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg">
+                {sugestoes.map((s) => (
+                  <li key={s.codigo}>
+                    <button
+                      onClick={() => adicionarCnae(s)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex gap-3"
+                    >
+                      <span className="font-mono text-blue-600 shrink-0">{formatCnae(s.codigo)}</span>
+                      <span className="text-slate-700">{s.descricao}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <select value={uf} onChange={(e) => setUf(e.target.value)} className={inputCls}>
+            <option value="">Todas as UFs da base</option>
+            {(b?.ufs ?? []).map((u) => (
+              <option key={u} value={u}>
+                {u}
+              </option>
+            ))}
+          </select>
+          <input
+            value={municipio}
+            onChange={(e) => setMunicipio(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !res.loading && buscar(0)}
+            placeholder="Município (opcional)"
+            className={`${inputCls} sm:col-span-2`}
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          <Opcao checked={secundario} onChange={setSecundario}>Considerar CNAE secundário</Opcao>
+          <Opcao checked={filiais} onChange={setFiliais}>Incluir filiais</Opcao>
+          <Opcao checked={ocultarMei} onChange={setOcultarMei}>Ocultar telefone e e-mail de MEIs</Opcao>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button
+            onClick={() => buscar(0)}
+            disabled={res.loading || !b}
+            className="px-6 py-3 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            {res.loading ? 'Buscando...' : 'Buscar empresas'}
+          </button>
+          {d && d.total > 0 && (
+            <button
+              onClick={exportarCsv}
+              disabled={baixandoCsv}
+              className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-blue-600 text-blue-600 font-medium hover:bg-blue-50 disabled:opacity-60 transition-colors"
+            >
+              {icons.fileText('w-4 h-4')}
+              {baixandoCsv ? 'Gerando...' : `Exportar CSV${d.total > 50000 ? ' (primeiras 50.000)' : ''}`}
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-slate-400">
+          Só empresas ativas. Telefone e e-mail de MEIs costumam ser da própria pessoa: ao contatá-las, respeite a LGPD.
+        </p>
+      </div>
+
+      {res.error && (
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4">
+          <span className="shrink-0 mt-0.5">{icons.alert('w-5 h-5')}</span>
+          <p className="text-sm">{res.error}</p>
+        </div>
+      )}
+
+      {/* Resultados */}
+      {d && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-6">
+          <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
+            <h3 className="text-lg font-semibold text-slate-900">
+              {d.total.toLocaleString('pt-BR')} {d.total === 1 ? 'empresa aberta' : 'empresas abertas'} de{' '}
+              {formatDate(d.periodo.de)} a {formatDate(d.periodo.ate)}
+            </h3>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">MEI: {d.por_tipo.mei.toLocaleString('pt-BR')}</span>
+              <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">
+                Empresário individual: {d.por_tipo.individual.toLocaleString('pt-BR')}
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">
+                Microempresa: {d.por_tipo.micro.toLocaleString('pt-BR')}
+              </span>
+            </div>
+          </div>
+
+          {d.empresas.length === 0 ? (
+            <p className="text-sm text-slate-500 py-8 text-center">Nenhuma empresa encontrada com esses filtros.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {d.empresas.map((e) => (
+                <li key={e.cnpj} className="py-3 flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900 break-words">
+                      {e.razao_social || '—'}
+                      {e.nome_fantasia && <span className="font-normal text-slate-500"> · {e.nome_fantasia}</span>}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      <span className="font-mono">{maskCNPJ(e.cnpj)}</span> · aberta em {formatDate(e.data_abertura)} ·{' '}
+                      {e.municipio} - {e.uf}
+                    </p>
+                    <p className="text-xs text-slate-600 mt-1">
+                      <span className="font-mono text-blue-600">{formatCnae(e.cnae_principal)}</span> {e.cnae_descricao}
+                    </p>
+                    {(e.telefones.length > 0 || e.email) && (
+                      <p className="text-xs text-slate-500 mt-1">
+                        {[e.telefones.join(' / '), e.email].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                    {e.contatos_ocultos && <p className="text-xs text-slate-400 mt-1">Contatos do MEI ocultos</p>}
+                  </div>
+                  <span
+                    className={`self-start shrink-0 px-2.5 py-1 rounded-full text-xs font-medium ${
+                      e.mei ? 'bg-green-100 text-green-700' : 'bg-blue-50 text-blue-700'
+                    }`}
+                  >
+                    {e.tipo}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {paginas > 1 && (
+            <div className="flex items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-100">
+              <button
+                onClick={() => buscar(d.deslocamento - d.limite)}
+                disabled={pagina <= 1 || res.loading}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Anterior
+              </button>
+              <span className="text-sm text-slate-500">
+                Página {pagina.toLocaleString('pt-BR')} de {paginas.toLocaleString('pt-BR')}
+              </span>
+              <button
+                onClick={() => buscar(d.deslocamento + d.limite)}
+                disabled={pagina >= paginas || res.loading}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Próxima
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ---------- Modal de chave (pedido só nas consultas pagas) ----------
 function KeyModal({ onSave, onClose }) {
   const [key, setKey] = useState(getAdminKey())
@@ -1310,10 +1728,11 @@ export default function App() {
         </header>
 
         {/* Abas */}
-        <div className="flex gap-2 mb-6 bg-white border border-slate-200 rounded-xl p-1.5 w-fit mx-auto">
+        <div className="flex flex-wrap justify-center gap-2 mb-6 bg-white border border-slate-200 rounded-xl p-1.5 w-fit mx-auto">
           {[
             { id: 'cnpj', label: 'Consulta CNPJ', icon: icons.building },
             { id: 'cpf', label: 'Consulta CPF', icon: icons.user },
+            { id: 'novas', label: 'Novas empresas', icon: icons.zap },
           ].map((t) => (
             <button
               key={t.id}
@@ -1328,14 +1747,12 @@ export default function App() {
           ))}
         </div>
 
-        {tab === 'cnpj' ? (
-          <TabCNPJ isAdmin={isAdmin} clientKeyRequired={clientKeyRequired} />
-        ) : (
-          <TabCPF />
-        )}
+        {tab === 'cnpj' && <TabCNPJ isAdmin={isAdmin} clientKeyRequired={clientKeyRequired} />}
+        {tab === 'cpf' && <TabCPF />}
+        {tab === 'novas' && <TabNovasEmpresas />}
 
         <footer className="text-center text-xs text-slate-400 mt-12 pb-8">
-          Dados públicos: publica.cnpj.ws • Consultas oficiais: SintegraWS + CNPJá • Documentos gerados não substituem
+          Dados públicos: publica.cnpj.ws e Dados Abertos do CNPJ (Receita Federal) • Consultas oficiais: SintegraWS + CNPJá • Documentos gerados não substituem
           os comprovantes oficiais dos órgãos emissores.
         </footer>
       </div>

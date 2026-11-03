@@ -1,6 +1,7 @@
 import express from 'express'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import * as novas from './novas-empresas.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -301,6 +302,48 @@ app.get('/api/comprovante-rf', auth, async (req, res) => {
     res.send(buf)
   } catch (e) {
     res.status(500).json({ error: 'Falha ao emitir o comprovante no CNPJá.', detail: String(e) })
+  }
+})
+
+// ---------- Novas empresas (base local da Receita Federal) ----------
+function erroNovas(res, e) {
+  if (e instanceof novas.ErroConsulta) return res.status(e.status).json({ error: e.message })
+  console.error('novas-empresas:', e)
+  res.status(500).json({ error: 'Falha ao consultar a base local da Receita.', detail: String(e?.message ?? e) })
+}
+
+app.get('/api/novas-empresas/status', auth, async (_req, res) => {
+  try {
+    res.json(await novas.statusBase())
+  } catch (e) {
+    erroNovas(res, e)
+  }
+})
+
+app.get('/api/novas-empresas', auth, async (req, res) => {
+  try {
+    res.json(await novas.buscar(req.query))
+  } catch (e) {
+    erroNovas(res, e)
+  }
+})
+
+app.get('/api/novas-empresas/csv', auth, async (req, res) => {
+  try {
+    const conteudo = await novas.csv(req.query)
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="novas-empresas-${new Date().toISOString().slice(0, 10)}.csv"`)
+    res.send(conteudo)
+  } catch (e) {
+    erroNovas(res, e)
+  }
+})
+
+app.get('/api/novas-empresas/cnaes', auth, async (req, res) => {
+  try {
+    res.json(await novas.buscarCnae(req.query.q))
+  } catch (e) {
+    erroNovas(res, e)
   }
 })
 
