@@ -5,7 +5,7 @@ name: Atualizar base da Receita
 #
 # Configuração em Settings > Secrets and variables > Actions:
 #   secret   SUPABASE_SYNC_URL  conexão do usuário cnpj_sync (pooler, porta 5432)
-#   variável UFS                opcional, padrão SP (ex.: SP,MG,RJ ou TODAS)
+#   variável UFS                opcional, padrão SP,RJ,MG (ex.: SP ou TODAS)
 #   variável MESES              opcional, padrão 24
 
 on:
@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 300
     env:
       SUPABASE_SYNC_URL: ${{ secrets.SUPABASE_SYNC_URL }}
-      UFS: ${{ vars.UFS || 'SP' }}
+      UFS: ${{ vars.UFS || 'SP,RJ,MG' }}
       MESES: ${{ vars.MESES || '24' }}
     steps:
       - uses: actions/checkout@v4
