@@ -11,7 +11,7 @@ FROM node:22-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY server.js ./
+COPY server.js novas-empresas.js ./
 COPY --from=build /app/dist ./dist
 ENV PORT=3000
 EXPOSE 3000
