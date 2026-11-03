@@ -64,7 +64,8 @@ SUPABASE_SYNC_URL='postgresql://cnpj_sync.<ref>:<senha 2>@aws-0-<regiao>.pooler.
 - O `baixar` baixa cerca de 7 GB da Receita (mesmo para uma só UF) e deixa só a base (`radar.duckdb`, cerca de
   2 GB para SP). Cada execução substitui a base, então informe todas as UFs desejadas. Para usar outro caminho,
   defina `RADAR_CNPJ_DB` no `baixar` e no `sincronizar`.
-- O `sincronizar` troca o conteúdo das tabelas numa única transação: o site continua mostrando a base anterior até o
-  fim da carga. `MESES=12` muda a janela guardada.
+- O `sincronizar` troca o conteúdo das tabelas numa única transação. Enquanto ela roda (1 a 2 minutos para SP), as
+  consultas da aba esperam e podem dar tempo esgotado; se a carga falhar, a base anterior continua. `MESES=12` muda a
+  janela guardada.
 
 Telefone e e-mail de MEIs costumam ser os da própria pessoa. Ao usar os dados para contato, respeite a LGPD.

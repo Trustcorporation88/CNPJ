@@ -60,7 +60,11 @@ async function main() {
   const selecao = COLUNAS.map((c) =>
     c === 'cnaes_secundarios' ? "'{' || array_to_string(cnaes_secundarios, ',') || '}' AS cnaes_secundarios" : c
   ).join(', ')
-  await d.run(`COPY (SELECT ${selecao} FROM estabelecimentos ${onde}) TO ${literal(csvEmpresas)} (HEADER false)`)
+  // Gravar em ordem de abertura deixa cada período em páginas contíguas no Postgres. Sem isso, contar um mês
+  // num disco frio vira dezenas de milhares de leituras aleatórias (mais de 20 s no compute Micro).
+  await d.run(
+    `COPY (SELECT ${selecao} FROM estabelecimentos ${onde} ORDER BY data_abertura, cnpj) TO ${literal(csvEmpresas)} (HEADER false)`
+  )
   await d.run(`COPY (SELECT codigo, descricao, descricao_norm FROM cnaes) TO ${literal(csvCnaes)} (HEADER false)`)
   const [{ n }] = await linhas(`SELECT count(*)::INTEGER AS n FROM estabelecimentos ${onde}`)
   d.closeSync()
