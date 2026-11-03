@@ -21,16 +21,26 @@ async function listar(pasta = '') {
   return parseListing(await r.text())
 }
 
-async function mesNoSupabase(url) {
+async function metadadosNoSupabase(url) {
   const db = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } })
   await db.connect()
   try {
-    const { rows } = await db.query("SELECT valor FROM cnpj.metadados WHERE chave = 'mes_referencia'")
-    return rows[0]?.valor ?? null
+    const { rows } = await db.query("SELECT chave, valor FROM cnpj.metadados WHERE chave IN ('mes_referencia', 'ufs')")
+    return Object.fromEntries(rows.map((r) => [r.chave, r.valor]))
   } finally {
     await db.end()
   }
 }
+
+// O radar grava `ufs` vazio quando a base é do Brasil inteiro (--todas).
+const conjuntoUfs = (s) =>
+  String(s ?? '')
+    .toUpperCase()
+    .split(',')
+    .map((u) => u.trim())
+    .filter((u) => u && u !== 'TODAS')
+    .sort()
+    .join(',')
 
 async function main() {
   const url = process.env.SUPABASE_SYNC_URL
@@ -46,11 +56,18 @@ async function main() {
   // A Receita sobe os arquivos aos poucos: a pasta do mês aparece antes de estar completa.
   const arquivos = (await listar(`${ultimo}/`)).filter((e) => !e.isDirectory && classifyFile(e.name))
   const faltam = REQUIRED_KINDS.filter((k) => !arquivos.some((e) => classifyFile(e.name) === k))
-  const atual = await mesNoSupabase(url)
+  const meta = await metadadosNoSupabase(url)
+  const atual = meta.mes_referencia ?? null
+  const ufsDesejadas = process.env.UFS ? conjuntoUfs(process.env.UFS) : null
+  const ufsAtuais = conjuntoUfs(meta.ufs)
+  const mudouUfs = atual !== null && ufsDesejadas !== null && ufsDesejadas !== ufsAtuais
 
   let novo = false
   if (faltam.length > 0) console.log(`Receita: ${ultimo} ainda incompleto (faltam ${faltam.join(', ')}).`)
-  else if (atual && atual >= ultimo) console.log(`Supabase já está com ${atual}; mais recente na Receita: ${ultimo}.`)
+  else if (mudouUfs) {
+    novo = true
+    console.log(`UFs mudaram: Supabase tem ${ufsAtuais || 'todas'}, pedido ${ufsDesejadas || 'todas'}.`)
+  } else if (atual && atual >= ultimo) console.log(`Supabase já está com ${atual}; mais recente na Receita: ${ultimo}.`)
   else {
     novo = true
     console.log(`Novo mês na Receita: ${ultimo} (Supabase: ${atual ?? 'vazio'}).`)
