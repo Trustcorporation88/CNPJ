@@ -62,8 +62,8 @@ Para ligar, em *Settings > Secrets and variables > Actions* do repositório:
 - *Secrets*: `SUPABASE_SYNC_URL` com a conexão do `cnpj_sync` (a mesma do comando abaixo).
 - *Variables* (opcionais): `UFS` (padrão `SP,RJ,MG`; ex.: `SP` ou `TODAS`) e `MESES` (padrão `24`).
 
-Para rodar na hora, em *Actions > Atualizar base da Receita > Run workflow* (marque "forcar" para recarregar o mesmo
-mês, por exemplo depois de mudar `UFS`). Se uma execução falhar, o GitHub avisa por e-mail e a base anterior continua
+Mudar `UFS` também dispara a recarga, na execução seguinte. Para rodar na hora, em *Actions > Atualizar base da
+Receita > Run workflow* ("forcar" recarrega mesmo sem mês novo nem mudança de UFs). Se uma execução falhar, o GitHub avisa por e-mail e a base anterior continua
 no site.
 
 ### Atualizar à mão
